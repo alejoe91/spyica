@@ -17,15 +17,15 @@ import time
 
 import spiketrain_generator as stg
 from tools import *
-from plot_spikeMEA_old import *
+from plot_spikeMEA import *
 
 root_folder = os.getcwd()
 
 plt.ion()
 plt.show()
-plot_raster = False
+plot_raster = True
 plot_temp = False
-plot_rec = False
+plot_rec = True
 
 #TODO add bursting events
 
@@ -102,7 +102,7 @@ class GenST:
 
         print 'Selecting cells'
         n_exc = int(self.p_exc*self.n_cells)
-        n_inh = int(self.p_inh*self.n_cells)
+        n_inh = self.n_cells - n_exc
         print n_exc, ' excitatory and ', n_inh, ' inhibitory'
 
         idxs_cells = select_cells(loc, spikes, bin_cat, n_exc, n_inh, bound_x=self.bound_x, min_amp=self.min_amp,
@@ -157,7 +157,7 @@ class GenST:
         print 'Generating spiketrains'
         print self.duration
         self.spgen = stg.SpikeTrainGenerator(n_exc=n_exc, n_inh=n_inh, f_exc=self.f_exc, f_inh=self.f_inh,
-                                             st_exc=1*pq.Hz, st_inh=2*pq.Hz, ref_period=3*pq.ms,
+                                             st_exc=1*pq.Hz, st_inh=2*pq.Hz, ref_period=5*pq.ms,
                                              process='poisson', t_start=0*pq.s, t_stop=self.duration)
 
         self.spgen.generate_spikes()
@@ -190,10 +190,9 @@ class GenST:
         print 'Adding spiketrain annotations'
         for i, st in enumerate(self.spgen.all_spiketrains):
             st.annotate(bintype=self.templates_bin[i], mtype=self.templates_cat[i], loc=self.templates_loc[i])
+        print 'Finding overlapping spikes'
+        annotate_overlapping(self.spgen.all_spiketrains, overlapping_pairs=self.overlapping, verbose=True)
 
-
-        print 'Generating clean recordings'
-        self.recordings = np.zeros((n_elec, n_samples))
 
         self.amp_mod = []
         self.cons_spikes = []
@@ -207,6 +206,9 @@ class GenST:
                                                  n_spikes=self.n_isi, exp=self.exp, mem_ISI=self.mem_isi)
             self.amp_mod.append(amp)
             self.cons_spikes.append(cons)
+
+        print 'Generating clean recordings'
+        self.recordings = np.zeros((n_elec, n_samples))
 
         # modulated convolution
         for st in range(spike_matrix.shape[0]):
@@ -328,6 +330,8 @@ class GenST:
         np.save(join(self.rec_path,'templates_cat'), self.templates_cat)
         np.save(join(self.rec_path,'templates_bincat'), self.templates_cat)
 
+        print 'Saved ', self.rec_path
+
 
 if __name__ == '__main__':
     '''
@@ -363,7 +367,7 @@ if __name__ == '__main__':
         dur = 5
     if '-ncells' in sys.argv:
         pos = sys.argv.index('-ncells')
-        ncells = sys.argv[pos + 1]
+        ncells = int(sys.argv[pos + 1])
     else:
         ncells = 30
     if '-pexc' in sys.argv:

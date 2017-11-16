@@ -177,7 +177,7 @@ class SpikeTrainGenerator:
                 if np.all(t_diff > self.ref_period):
                     times2 = np.sort(np.concatenate((np.array(times2), np.array([t1]))))
                     times2 = times2 * unit
-                    st2 = neo.SpikeTrain(times2, tstart=t_start, t_stop=t_stop)
+                    st2 = neo.SpikeTrain(times2, t_start=t_start, t_stop=t_stop)
                     self.set_spiketrain(idx2, st2)
 
 
