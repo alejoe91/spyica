@@ -726,21 +726,21 @@ def detect_and_align(sources, fs, recordings, t_start=None, t_stop=None, n_std=7
                     spike = s[:idx + n_pad]
                     spike = np.pad(spike, (np.abs(idx - n_pad), 0), 'constant')
                     t_spike = times[:idx + n_pad]
-                    t_spike = np.pad(t_spike, (np.abs(idx - n_pad), 0), 'constant')
+                    t_spike = np.pad(t_spike, (np.abs(idx - n_pad), 0), 'constant') * unit
                     spike_rec = recordings[:, :idx + n_pad]
                     spike_rec = np.pad(spike_rec, ((0, 0), (np.abs(idx - n_pad), 0)), 'constant')
                 elif idx + n_pad > len(s):
                     spike = s[idx - n_pad:]
                     spike = np.pad(spike, (0, idx + n_pad - len(s)), 'constant')
                     t_spike = times[idx - n_pad:]
-                    t_spike = np.pad(t_spike, (0, idx + n_pad - len(s)), 'constant')
+                    t_spike = np.pad(t_spike, (0, idx + n_pad - len(s)), 'constant') * unit
                     spike_rec = recordings[:, idx - n_pad:]
                     spike_rec = np.pad(spike_rec, ((0, 0), (0, idx + n_pad - len(s))), 'constant')
 
                 # upsample and find minimume
                 spike_up = ss.resample_poly(spike, upsample, 1)
                 # times_up = ss.resample_poly(t_spike, upsample, 1)*unit
-                times_up = np.linspace(t_spike[0].magnitude, t_spike[-1].magnitude, num=len(spike_up))*unit
+                times_up = np.linspace(t_spike[0].magnitude, t_spike[-1].magnitude, num=len(spike_up)) * unit
 
                 min_idx_up = np.argmin(spike_up)
                 min_amp_up = np.min(spike_up)
@@ -787,7 +787,7 @@ def detect_and_align(sources, fs, recordings, t_start=None, t_stop=None, n_std=7
     return spike_trains
 
 
-def reject_duplicate_spiketrains(sst, percent_threshold=0.8):
+def reject_duplicate_spiketrains(sst, percent_threshold=0.8, min_spikes=3):
     # spiketrains
     import neo
     spike_trains = []
@@ -807,15 +807,17 @@ def reject_duplicate_spiketrains(sst, percent_threshold=0.8):
                 if count >= percent_threshold * len(sp_times):
                     if [i, j] not in duplicates and [j, i] not in duplicates:
                         print 'Found duplicate spike trains: ', i, j
-
                         duplicates.append([i, j])
-
                 counts.append(count)
+
     duplicates = np.array(duplicates)
-    for i, sp_times in enumerate(sst):
-        if i not in duplicates[:, 1]:
-            spike_trains.append(sp_times)
-            idx_sources.append(i)
+    if len(duplicates) > 0:
+        for i, sp_times in enumerate(sst):
+            if i not in duplicates[:, 1]:
+                # reject spiketrains with less than 3 spikes...
+                if len(sp_times) >= min_spikes:
+                    spike_trains.append(sp_times)
+                    idx_sources.append(i)
 
     return spike_trains, idx_sources, duplicates
 
@@ -900,11 +902,12 @@ def clean_sources(sources, corr_thresh=0.4, skew_thresh=0.5):
         spike_sources = sources_keep
         source_idx = high_sk
 
+
     sk_sp = stat.skew(spike_sources, axis=1)
     # invert sources with positive skewness
     spike_sources[sk_sp > 0] = -spike_sources[sk_sp > 0]
 
-    return spike_sources, high_sk, corr_idx
+    return spike_sources, source_idx, corr_idx
 
 
 
@@ -1069,80 +1072,86 @@ def cluster_spike_amplitudes(spike_amps, sst, metric='cal', min_sihlo=0.8, min_c
         silho = 0
         cal_har = 0
         keep_going = True
-        for k in range(2, max_clusters):
-            if alg=='kmeans':
-                kmeans_new = KMeans(n_clusters=k, random_state=0)
-                kmeans_new.fit(amps.reshape(-1, 1))
-                labels = kmeans_new.predict(amps.reshape(-1, 1))
-            elif alg=='mog':
-                gmm_new = GaussianMixture(n_components=k, covariance_type='full')
-                gmm_new.fit(amps.reshape(-1, 1))
-                labels = gmm_new.predict(amps.reshape(-1, 1))
 
-            if len(np.unique(labels)) > 1:
-                silho_new = silhouette_score(amps.reshape(-1, 1), labels)
-                cal_har_new = calinski_harabaz_score(amps.reshape(-1, 1), labels)
-                if silho_new > silho:
-                    silho = silho_new
-                    if metric == 'silho':
-                        nclusters[i] = k
-                        if alg == 'kmeans':
-                            kmeans = kmeans_new
-                        elif alg == 'mog':
-                            gmm = gmm_new
-                        keep_going=False
-                if cal_har_new > cal_har:
-                    cal_har = cal_har_new
-                    if metric == 'cal':
-                        nclusters[i] = k
-                        if alg == 'kmeans':
-                            kmeans = kmeans_new
-                        elif alg == 'mog':
-                            gmm = gmm_new
-                        keep_going=False
-            else:
-                keep_going=False
-                nclusters[i] = 1
+        if len(amps) > 2:
+            for k in range(2, max_clusters):
+                if alg=='kmeans':
+                    kmeans_new = KMeans(n_clusters=k, random_state=0)
+                    kmeans_new.fit(amps.reshape(-1, 1))
+                    labels = kmeans_new.predict(amps.reshape(-1, 1))
+                elif alg=='mog':
+                    gmm_new = GaussianMixture(n_components=k, covariance_type='full')
+                    gmm_new.fit(amps.reshape(-1, 1))
+                    labels = gmm_new.predict(amps.reshape(-1, 1))
 
-            if not keep_going:
-                break
-
-        if nclusters[i] != 1:
-            if metric == 'silho':
-                if silho < min_sihlo:
-                    nclusters[i] = 1
-                    reduced_sst.append(sst[i])
-                    reduced_amps.append(amps)
-                    keep_id.append(range(len(sst[i])))
+                if len(np.unique(labels)) > 1:
+                    silho_new = silhouette_score(amps.reshape(-1, 1), labels)
+                    cal_har_new = calinski_harabaz_score(amps.reshape(-1, 1), labels)
+                    if silho_new > silho:
+                        silho = silho_new
+                        if metric == 'silho':
+                            nclusters[i] = k
+                            if alg == 'kmeans':
+                                kmeans = kmeans_new
+                            elif alg == 'mog':
+                                gmm = gmm_new
+                            keep_going=False
+                    if cal_har_new > cal_har:
+                        cal_har = cal_har_new
+                        if metric == 'cal':
+                            nclusters[i] = k
+                            if alg == 'kmeans':
+                                kmeans = kmeans_new
+                            elif alg == 'mog':
+                                gmm = gmm_new
+                            keep_going=False
                 else:
-                    highest_clust = np.argmin(kmeans.cluster_centers_)
-                    highest_idx = np.where(labels==highest_clust)[0]
-                    reduced_sst.append(sst[i][highest_idx])
-                    reduced_amps.append(amps[highest_idx])
-                    keep_id.append(highest_idx)
-            elif metric == 'cal':
-                if cal_har < min_cal:
+                    keep_going=False
                     nclusters[i] = 1
-                    reduced_sst.append(sst[i])
-                    reduced_amps.append(amps)
-                    keep_id.append(range(len(sst[i])))
-                else:
-                    if alg=='kmeans':
+
+                if not keep_going:
+                    break
+
+            if nclusters[i] != 1:
+                if metric == 'silho':
+                    if silho < min_sihlo:
+                        nclusters[i] = 1
+                        reduced_sst.append(sst[i])
+                        reduced_amps.append(amps)
+                        keep_id.append(range(len(sst[i])))
+                    else:
                         highest_clust = np.argmin(kmeans.cluster_centers_)
-                    elif alg == 'mog':
-                        highest_clust = np.argmin(gmm.means_)
-                    highest_idx = np.where(labels==highest_clust)[0]
-                    red_spikes = sst[i][highest_idx]
-                    if 'ica_amp' in red_spikes.annotations:
-                        red_spikes.annotate(ica_amp=red_spikes.annotations['ica_amp'])
-                    if 'ica_wf' in red_spikes.annotations:
-                        red_spikes.annotate(ica_wf=red_spikes.annotations['ica_wf'])
-                    reduced_sst.append(red_spikes)
-                    reduced_amps.append(amps[highest_idx])
-                    keep_id.append(highest_idx)
+                        highest_idx = np.where(labels==highest_clust)[0]
+                        reduced_sst.append(sst[i][highest_idx])
+                        reduced_amps.append(amps[highest_idx])
+                        keep_id.append(highest_idx)
+                elif metric == 'cal':
+                    if cal_har < min_cal:
+                        nclusters[i] = 1
+                        reduced_sst.append(sst[i])
+                        reduced_amps.append(amps)
+                        keep_id.append(range(len(sst[i])))
+                    else:
+                        if alg=='kmeans':
+                            highest_clust = np.argmin(kmeans.cluster_centers_)
+                        elif alg == 'mog':
+                            highest_clust = np.argmin(gmm.means_)
+                        highest_idx = np.where(labels==highest_clust)[0]
+                        red_spikes = sst[i][highest_idx]
+                        if 'ica_amp' in red_spikes.annotations:
+                            red_spikes.annotate(ica_amp=red_spikes.annotations['ica_amp'])
+                        if 'ica_wf' in red_spikes.annotations:
+                            red_spikes.annotate(ica_wf=red_spikes.annotations['ica_wf'])
+                        reduced_sst.append(red_spikes)
+                        reduced_amps.append(amps[highest_idx])
+                        keep_id.append(highest_idx)
 
-            silhos[i] = silho
-            cal_hars[i] = cal_har
+                silhos[i] = silho
+                cal_hars[i] = cal_har
+            else:
+                reduced_sst.append(sst[i])
+                reduced_amps.append(amps)
+                keep_id.append(range(len(sst[i])))
         else:
             reduced_sst.append(sst[i])
             reduced_amps.append(amps)

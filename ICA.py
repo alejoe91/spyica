@@ -32,6 +32,29 @@ def instICA(X, n_comp='all'):
 
     return sources, A, W
 
+def iICAweights(weight, mea_dim=None, axis=None, cmap='viridis', style='mat', origin='lower'):
+    import matplotlib.pyplot as plt
+    if len(weight.shape) == 3:
+        raise AttributeError('Plot one weight at a time!')
+    else:
+        if axis:
+            ax = axis
+        else:
+            fig = plt.figure()
+            ax = fig.add_subplot(111)
+        if (mea_dim[0] * mea_dim[1]) == weight.shape[0]:
+            mea_values = weight.reshape((mea_dim[0], mea_dim[1]))
+            if style == 'mat':
+                im = ax.matshow(np.transpose(mea_values), cmap=cmap, origin=origin)
+            else:
+                im = ax.imshow(np.transpose(mea_values), cmap=cmap, origin=origin)
+        else:
+            raise Exception('MEA dimnensions are wrong!')
+        ax.axis('off')
+
+        return ax, im
+
+
 
 def cICAemb(X, n_comp='all', L=3):
     """Performs convolutive embedded ICA described in:
@@ -78,8 +101,34 @@ def cICAemb(X, n_comp='all', L=3):
     return sources, A, W
 
 
+def cICAweights(weight, mea_dim=None, cmap='viridis', style='mat', origin='lower'):
+    import matplotlib.pyplot as plt
+    #  check if number of spike is 1
+    if len(weight.shape) == 3:
+        raise AttributeError('Plot one weight at a time!')
+    else:
+        if np.mod(weight.shape[0], (mea_dim[0] * mea_dim[1])) == 0:
+            lag = weight.shape[0] / (mea_dim[0] * mea_dim[1])
+            fig = plt.figure()
+            axes = []
+            images = []
+            for l in range(lag):
+                ax = fig.add_subplot(1, lag, l+1)
+                w_l = weight[l::lag]
+                mea_values = w_l.reshape((mea_dim[0], mea_dim[1]))
+                if style == 'mat':
+                    im = ax.matshow(np.transpose(mea_values), cmap=cmap, origin=origin)
+                else:
+                    im = ax.imshow(np.transpose(mea_values), cmap=cmap, origin=origin)
+                ax.axis('off')
+                axes.append(ax)
+                images.append(im)
+        else:
+            raise Exception('MEA dimnensions are wrong!')
+        return axes, images
 
-def gFICA(X, dim, n_comp='all'):
+
+def gFICA(X, dim, mode='time', n_comp='all'):
     """Performs instantaneous gradient-flow ICA described in:
 
     Stanacevic, M., Cauwenberghs, G., & Zweig, G. (2002, May).
@@ -91,6 +140,8 @@ def gFICA(X, dim, n_comp='all'):
     ----------
     X : np.array
         2d array of analog signals (N x T)
+    dim :  array dimension to reshape
+    mode : 'time' - 'space' - 'spacetime'
     n_comp : int or 'all'
              number of ICA components
 
@@ -106,21 +157,29 @@ def gFICA(X, dim, n_comp='all'):
     if dim[0]*dim[1] != n_elec:
         raise AttributeError('Reshape dimensions are wrong!')
     X_res = np.reshape(X, (dim[0], dim[1], n_samples))
-    # X_grad_t = np.zeros((n_elec, n_samples-1))
-    X_grad_i = np.zeros((dim[0]-1, dim[1], n_samples-1))
-    X_grad_j = np.zeros((dim[0], dim[1]-1, n_samples-1))
+    X_grad_x_res = np.zeros((dim[0]-1, dim[1], n_samples-1))
+    X_grad_y_res = np.zeros((dim[0], dim[1]-1, n_samples-1))
 
     for i in range(dim[0]-1):
         for j in range(dim[1]):
-            X_grad_i[i, j] = X_res[i+1, j, 1:]-X_res[i, j, 1:]
+            X_grad_x_res[i, j] = X_res[i+1, j, 1:]-X_res[i, j, 1:]
     for i in range(dim[0]):
         for j in range(dim[1]-1):
-            X_grad_j[i, j] = X_res[i, j+1, 1:]-X_res[i, j, 1:]
-    X_grad_t = np.diff(X, axis=1)
+            X_grad_y_res[i, j] = X_res[i, j+1, 1:]-X_res[i, j, 1:]
 
-    X_gf = np.vstack((X_grad_t,
-                      np.reshape(X_grad_i, ((dim[0]-1)*(dim[1]), n_samples-1)),
-                      np.reshape(X_grad_j, ((dim[0])*(dim[1]-1), n_samples-1))))
+    X_grad_t = np.diff(X, axis=1)
+    X_grad_t = np.pad(X_grad_t, ((0, 0), (0, 1)), 'constant')
+    X_grad_x = np.reshape(X_grad_x_res, ((dim[0] - 1) * (dim[1]), n_samples - 1))
+    X_grad_y = np.reshape(X_grad_y_res, ((dim[0]) * (dim[1] - 1), n_samples-1))
+
+    if mode == 'time':
+        X_gf = np.vstack((X, X_grad_t))
+    elif mode == 'space':
+        X_gf = np.vstack((X, X_grad_x, X_grad_y))
+    elif mode == 'spacetime':
+        X_gf = np.vstack((X, X_grad_t, X_grad_x, X_grad_y))
+    else:
+        raise AttributeError('Gradient flow mode is unknown!')
 
     if n_comp == 'all':
         n_comp = X_gf.shape[0]
@@ -131,5 +190,135 @@ def gFICA(X, dim, n_comp='all'):
     W = ica.components_
 
     return sources, A, W
+
+def gfICAweights(weight, mea_dim=None, mode='time', cmap='viridis', style='mat', origin='lower'):
+    import matplotlib.pyplot as plt
+    if len(weight.shape) == 3:
+        raise AttributeError('Plot one weight at a time!')
+    else:
+
+        if mode == 'time':
+            dim = mea_dim[0] * mea_dim[1]
+
+            if 2*dim == weight.shape[0]:
+                w = weight[:dim]
+                w_t = weight[dim:]
+                mea_values = w.reshape((mea_dim[0], mea_dim[1]))
+                mea_values_t = w_t.reshape((mea_dim[0], mea_dim[1]))
+
+                fig = plt.figure()
+                ax1 = fig.add_subplot(1, 2, 1)
+                ax2 = fig.add_subplot(1, 2, 2)
+
+                if style == 'mat':
+                    im1 = ax1.matshow(np.transpose(mea_values), cmap=cmap, origin=origin)
+                    im2 = ax2.matshow(np.transpose(mea_values_t), cmap=cmap, origin=origin)
+                else:
+                    im1 = ax1.imshow(np.transpose(mea_values), cmap=cmap, origin=origin)
+                    im2 = ax2.imshow(np.transpose(mea_values_t), cmap=cmap, origin=origin)
+                ax1.axis('off')
+                ax2.axis('off')
+
+                ax1.set_title('time')
+                ax2.set_title('grad time')
+
+                axes = [ax1, ax2]
+                images = [im1, im2]
+            else:
+                raise Exception('MEA dimnensions are wrong!')
+
+        elif mode == 'space':
+            dim = mea_dim[0] * mea_dim[1]
+            dx_dim = (mea_dim[0] - 1) * mea_dim[1]
+            dy_dim = mea_dim[0] * (mea_dim[1] - 1)
+
+            if dim + dx_dim + dy_dim == weight.shape[0]:
+                w = weight[:dim]
+                w_x = weight[dim:dim + dx_dim]
+                w_y = weight[dim + dx_dim:dim + dx_dim+dy_dim]
+
+                mea_values = w.reshape((mea_dim[0], mea_dim[1]))
+                mea_values_x = w_x.reshape((mea_dim[0] - 1, mea_dim[1]))
+                mea_values_y = w_y.reshape((mea_dim[0], mea_dim[1] - 1))
+
+                fig = plt.figure()
+                ax1 = fig.add_subplot(1, 3, 1)
+                ax2 = fig.add_subplot(1, 3, 2)
+                ax3 = fig.add_subplot(1, 3, 3)
+
+                if style == 'mat':
+                    im1 = ax1.matshow(np.transpose(mea_values), cmap=cmap, origin=origin)
+                    im2 = ax2.matshow(np.transpose(mea_values_x), cmap=cmap, origin=origin)
+                    im3 = ax3.matshow(np.transpose(mea_values_y), cmap=cmap, origin=origin)
+                else:
+                    im1 = ax1.imshow(np.transpose(mea_values), cmap=cmap, origin=origin)
+                    im2 = ax2.imshow(np.transpose(mea_values_x), cmap=cmap, origin=origin)
+                    im3 = ax3.imshow(np.transpose(mea_values_y), cmap=cmap, origin=origin)
+                ax1.axis('off')
+                ax2.axis('off')
+                ax3.axis('off')
+                ax1.set_title('time')
+                ax2.set_title('grad x')
+                ax3.set_title('grad y')
+
+                axes = [ax1, ax2, ax3]
+                images = [im1, im2, im3]
+            else:
+                raise Exception('MEA dimnensions are wrong!')
+        elif mode == 'spacetime':
+            dim = mea_dim[0] * mea_dim[1]
+            dx_dim = (mea_dim[0] - 1) * mea_dim[1]
+            dy_dim = mea_dim[0] * (mea_dim[1] - 1)
+
+            if 2*dim + dx_dim + dy_dim == weight.shape[0]:
+                w = weight[:dim]
+                w_t = weight[dim:2*dim]
+                w_x = weight[2*dim:dim + dx_dim]
+                w_y = weight[2*dim + dx_dim:dim + dx_dim + dy_dim]
+
+                mea_values = w.reshape((mea_dim[0], mea_dim[1]))
+                mea_values_t = w_t.reshape((mea_dim[0], mea_dim[1]))
+                mea_values_x = w_x.reshape((mea_dim[0] - 1, mea_dim[1]))
+                mea_values_y = w_y.reshape((mea_dim[0], mea_dim[1] - 1))
+
+                fig = plt.figure()
+                ax1 = fig.add_subplot(2, 2, 1)
+                ax2 = fig.add_subplot(2, 2, 2)
+                ax3 = fig.add_subplot(2, 2, 3)
+                ax4 = fig.add_subplot(2, 2, 4)
+
+                if style == 'mat':
+                    im1 = ax1.matshow(np.transpose(mea_values), cmap=cmap, origin=origin)
+                    im2 = ax2.matshow(np.transpose(mea_values_t), cmap=cmap, origin=origin)
+                    im3 = ax3.matshow(np.transpose(mea_values_x), cmap=cmap, origin=origin)
+                    im4 = ax4.matshow(np.transpose(mea_values_y), cmap=cmap, origin=origin)
+                else:
+                    im1 = ax1.imshow(np.transpose(mea_values), cmap=cmap, origin=origin)
+                    im2 = ax2.matshow(np.transpose(mea_values_t), cmap=cmap, origin=origin)
+                    im3 = ax3.imshow(np.transpose(mea_values_x), cmap=cmap, origin=origin)
+                    im4 = ax4.imshow(np.transpose(mea_values_y), cmap=cmap, origin=origin)
+                ax1.axis('off')
+                ax2.axis('off')
+                ax3.axis('off')
+                ax4.axis('off')
+
+                axes = [ax1, ax2, ax3, ax4]
+                images = [im1, im2, im3, im4]
+
+                ax1.set_title('time')
+                ax2.set_title('grad time')
+                ax3.set_title('grad x')
+                ax4.set_title('grad y')
+
+            else:
+                raise Exception('MEA dimnensions are wrong!')
+        else:
+                raise AttributeError('Gradient flow mode is unknown!')
+
+
+
+
+
+    return axes, images
 
 

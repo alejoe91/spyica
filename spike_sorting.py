@@ -34,7 +34,7 @@ plot_rasters = True
 
 
 class SpikeSorter:
-    def __init__(self, save=False, rec_folder=None, alg=None):
+    def __init__(self, save=False, rec_folder=None, alg=None, lag=None, gfmode=None):
         self.rec_folder = rec_folder
         self.model = alg
         self.corr_thresh = 0.5
@@ -46,6 +46,8 @@ class SpikeSorter:
         self.gtst = np.load(join(self.rec_folder, 'spiketrains.npy'))
         self.recordings = np.load(join(self.rec_folder, 'recordings.npy'))
         self.templates = np.load(join(self.rec_folder, 'templates.npy'))
+        self.templates_cat = np.load(join(self.rec_folder, 'templates_cat.npy'))
+        self.templates_loc = np.load(join(self.rec_folder, 'templates_loc.npy'))
 
         rec_info = [f for f in os.listdir(self.rec_folder) if '.yaml' in f or '.yml' in f][0]
         with open(join(self.rec_folder, rec_info), 'r') as f:
@@ -98,10 +100,13 @@ class SpikeSorter:
             if 'klusta' in alg_split:
                 self.klusta = True
 
+        self.lag = lag
+        self.gfmode = gfmode
+
         if self.ica:
             print 'Applying instantaneous ICA'
             t_start = time.time()
-            self.s_ica, A_ica, W_ica = ica.instICA(self.recordings)
+            self.s_ica, self.A_ica, self.W_ica = ica.instICA(self.recordings)
 
             if plot_source:
                 plot_mea_recording(self.s_ica, self.mea_pos, self.mea_dim, color='r')
@@ -127,8 +132,9 @@ class SpikeSorter:
 
                 self.sst, self.amps, self.nclusters, keep, score = \
                     cluster_spike_amplitudes(self.spike_amps, self.spike_trains, metric='cal', alg=self.alg)
-
                 self.sst, self.independent_spike_idx, self.duplicates = reject_duplicate_spiketrains(self.sst)
+
+                self.ica_spike_sources_idx = self.source_idx[self.independent_spike_idx]
                 self.ica_spike_sources = self.cleaned_sources_ica[self.independent_spike_idx]
 
             elif self.clustering=='klusta':
@@ -235,8 +241,6 @@ class SpikeSorter:
                 ax1 = fig.add_subplot(211)
                 ax2 = fig.add_subplot(212)
 
-                sst_order = self.pairs[:, 1]
-
                 raster_plots(self.gtst, color_st=self.pairs[:, 0], ax=ax1)
                 raster_plots(self.sst, color_st=self.pairs[:, 1], ax=ax2)
 
@@ -247,7 +251,7 @@ class SpikeSorter:
         if self.cica:
             print 'Applying convolutive embedded ICA'
             t_start = time.time()
-            self.s_cica, A_cica, W_cica = ica.cICAemb(self.recordings, L=2)
+            self.s_cica, self.A_cica, self.W_cica = ica.cICAemb(self.recordings, L=self.lag)
             print 'Elapsed time: ', time.time() - t_start
 
             if plot_source:
@@ -274,6 +278,7 @@ class SpikeSorter:
                 cluster_spike_amplitudes(self.spike_amps, self.spike_trains, metric='cal', alg=self.alg)
 
             self.sst, self.independent_spike_idx, self.duplicates = reject_duplicate_spiketrains(self.sst)
+            self.cica_spike_sources_idx = self.source_idx[self.independent_spike_idx]
             self.cica_spike_sources = self.cleaned_sources_cica[self.independent_spike_idx]
 
             self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
@@ -311,14 +316,15 @@ class SpikeSorter:
                 sst_order = self.pairs[:, 1]
 
                 raster_plots(self.gtst, color_st=self.pairs[:, 0], ax=ax1)
-                raster_plots(np.array(self.sst)[sst_order], color_st=self.pairs[:, 0], ax=ax2)
+                raster_plots(self.sst, color_st=self.pairs[:, 1], ax=ax2)
 
-                ax1.set_title('convICA')
+                ax1.set_title('cICA GT', fontsize=20)
+                ax2.set_title('cICA ST', fontsize=20)
 
         if self.gfica:
             print 'Applying gradient-flow ICA'
             t_start = time.time()
-            self.s_gfica, A_gf, W_gf = ica.gFICA(self.recordings, self.mea_dim)
+            self.s_gfica, self.A_gfica, self.W_gfica = ica.gFICA(self.recordings, self.mea_dim, mode=self.gfmode)
             # s_gf_int = integrate_sources(s_gf)
             print 'Elapsed time: ', time.time() - t_start
 
@@ -357,6 +363,7 @@ class SpikeSorter:
                 cluster_spike_amplitudes(self.spike_amps, self.spike_trains, metric='cal', alg=self.alg)
 
             self.sst, self.independent_spike_idx, self.duplicates = reject_duplicate_spiketrains(self.sst)
+            self.gfica_spike_sources_idx = self.source_idx[self.independent_spike_idx]
             self.gfica_spike_sources = self.cleaned_sources_gfica[self.independent_spike_idx]
 
             self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
@@ -394,9 +401,10 @@ class SpikeSorter:
                 sst_order = self.pairs[:, 1]
 
                 raster_plots(self.gtst, color_st=self.pairs[:, 0], ax=ax1)
-                raster_plots(np.array(self.sst)[sst_order], color_st=self.pairs[:, 0], ax=ax2)
+                raster_plots(self.sst, color_st=self.pairs[:, 1], ax=ax2)
 
-                ax1.set_title('gfICA')
+                ax1.set_title('gfICA GT', fontsize=20)
+                ax2.set_title('gfICA ST', fontsize=20)
 
         if self.sfa:
             print 'Applying Slow Features Analysis'
@@ -515,16 +523,16 @@ if __name__ == '__main__':
         mod = sys.argv[pos + 1]
     else:
         mod = 'ICA'
-    # if '-dur' in sys.argv:
-    #     pos = sys.argv.index('-dur')
-    #     dur = sys.argv[pos + 1]
-    # else:
-    #     dur = 5
-    # if '-ncells' in sys.argv:
-    #     pos = sys.argv.index('-ncells')
-    #     ncells = sys.argv[pos + 1]
-    # else:
-    #     ncells = 30
+    if '-L' in sys.argv:
+        pos = sys.argv.index('-L')
+        lag = int(sys.argv[pos + 1])
+    else:
+        lag = 2
+    if '-gfmode' in sys.argv:
+        pos = sys.argv.index('-gfmode')
+        gfmode = sys.argv[pos + 1]
+    else:
+        gfmode = 'time'
     # if '-pexc' in sys.argv:
     #     pos = sys.argv.index('-pexc')
     #     pexc = sys.argv[pos + 1]
@@ -579,9 +587,9 @@ if __name__ == '__main__':
     # else:
     #     modulation = True
     if len(sys.argv) == 1:
-        print 'Arguments: \n   -r recording filename\n   -mod ICA - cICA - gfICA - SFA'
-              # '   -ncells number of cells\n' \
-              # '   -pexc proportion of exc cells\n   -bx x boundaries [xmin,xmax]\n   -minamp minimum amplitude\n' \
+        print 'Arguments: \n   -r recording filename\n   -mod ICA - cICA - gfICA - SFA - klusta\n' \
+              '-L   cICA lag\n   -gfmode gradient-flow mode (time - space - spacetime)\n '
+              #-bx x boundaries [xmin,xmax]\n   -minamp minimum amplitude\n' \
               # '   -noise uncorrelated-correlated\n   -noiselev level of rms noise in uV\n   -dur duration\n' \
               # '   -fexc freq exc neurons\n   -finh freq inh neurons\n   -nofilter if filter or not\n' \
               # '   -over overlapping spike threshold (0.6)\n   -sync added synchorny rate\n' \
@@ -589,5 +597,5 @@ if __name__ == '__main__':
     elif '-r' not in sys.argv:
         raise AttributeError('Provide model folder for data')
     else:
-        sps = SpikeSorter(save=True, rec_folder=rec_folder, alg=mod)
+        sps = SpikeSorter(save=True, rec_folder=rec_folder, alg=mod, lag=lag, gfmode=gfmode)
 
