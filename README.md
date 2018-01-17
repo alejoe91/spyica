@@ -1,3 +1,3 @@
 # SpyICA
 
-Investigate the applicability of ICA and SFA for spike sorting.
+Investigate the applicability of ICA for spike sorting.
