@@ -23,3 +23,7 @@ The supported spike-sorting algorithms (so far) are:
 - (smooth)  smoothed ICA implemented in Tensorflow
 
 - (spykingcircus) to be implemented...
+
+To see all available arguments run:
+
+`run spike_sorting`
