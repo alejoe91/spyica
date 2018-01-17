@@ -429,7 +429,8 @@ if __name__ == '__main__':
     else:
         modulation=True
     if len(sys.argv) == 1:
-        print 'Arguments: \n   -f filename\n   -freq sampling frequency (in kHz)\n   -ncells number of cells\n' \
+        print 'Arguments: \n   -f filename\n   -dur duration\n   -freq sampling frequency (in kHz)\n   ' \
+              '-ncells number of cells\n' \
               '   -pexc proportion of exc cells\n   -bx x boundaries [xmin,xmax]\n   -minamp minimum amplitude\n' \
               '   -noise uncorrelated-correlated\n   -noiselev level of rms noise in uV\n   -dur duration\n' \
               '   -fexc freq exc neurons\n   -finh freq inh neurons\n   -nofilter if filter or not\n' \

@@ -1,0 +1,22 @@
+% flag for GPU (must have CUDA installed)
+tic
+useGPU = 0;
+
+fpath = '{}';
+
+% create channel map file
+run(fullfile('kilosort_channelmap.m'));
+
+% Run the configuration file, it builds the structure of options (ops)
+run(fullfile('kilosort_config.m'))
+
+% This part runs the normal Kilosort processing on the simulated data
+[rez, DATA, uproj] = preprocessData(ops); % preprocess data and extract spikes for initialization
+rez                = fitTemplates(rez, DATA, uproj);  % fit templates iteratively
+rez                = fullMPMU(rez, DATA);% extract final spike times (overlapping extraction)
+
+% save python results file for Phy
+mkdir('results')
+rezToPhy(rez, fullfile(pwd, 'results'));
+toc
+

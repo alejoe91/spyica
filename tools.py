@@ -8,6 +8,7 @@ import elephant
 # from scipy.optimize import curve_fit
 import os
 from os.path import join
+import matplotlib.pylab as plt
 
 def load(filename):
     '''Generic loading of cPickled objects from file'''
@@ -675,7 +676,7 @@ def cubic_padding(spike, pad_len, fs, percent_mean=0.2):
 
 
 
-def detect_and_align(sources, fs, recordings, t_start=None, t_stop=None, n_std=7, ref_period=2*pq.ms, upsample=8):
+def detect_and_align(sources, fs, recordings, t_start=None, t_stop=None, n_std=4, ref_period=2*pq.ms, upsample=8):
     '''
 
     Parameters
@@ -709,11 +710,12 @@ def detect_and_align(sources, fs, recordings, t_start=None, t_stop=None, n_std=7
         idx_spike = np.where(s < thresh)[0]
         idx_spikes.append(idx_spike)
 
-        n_pad = int(2 * pq.ms * fs)
+        n_pad = int(2 * pq.ms * fs.rescale('kHz'))
         sp_times = []
         sp_wf = []
         sp_rec_wf = []
         sp_amp = []
+
         for t in range(len(idx_spike) - 1):
             idx = idx_spike[t]
             # find single waveforms crossing thresholds
@@ -814,10 +816,12 @@ def reject_duplicate_spiketrains(sst, percent_threshold=0.8, min_spikes=3):
     if len(duplicates) > 0:
         for i, sp_times in enumerate(sst):
             if i not in duplicates[:, 1]:
-                # reject spiketrains with less than 3 spikes...
+                # rej ect spiketrains with less than 3 spikes...
                 if len(sp_times) >= min_spikes:
                     spike_trains.append(sp_times)
                     idx_sources.append(i)
+    else:
+        spike_trains = sst
 
     return spike_trains, idx_sources, duplicates
 
@@ -1377,7 +1381,7 @@ def evaluate_spiketrains(gtst, sst, t_jitt = 1*pq.ms, overlapping=False):
 
     print 'FP :', FP
 
-    print 'TOTAL: ', total_spikes, TP+TPO+TPSO+CL+CLO+CLSO+FN+FNO+FNSO+FP
+    print 'TOTAL: ', TOT_GT, TOT_ST, TP+TPO+TPSO+CL+CLO+CLSO+FN+FNO+FNSO+FP
 
     counts = {'TP': TP, 'TPO': TPO, 'TPSO': TPSO,
               'CL': CL, 'CLO': CLO, 'CLSO': CLSO,
@@ -1474,7 +1478,7 @@ def raster_plots(st, bintype=False, ax=None, overlap=None, color_st=None, fs=10)
     return ax
 
 ###### KLUSTA #########
-def save_binary_format(filename, signal, spikesorter='klusta'):
+def save_binary_format(filename, signal, spikesorter='klusta', dtype='float32'):
     """Saves analog signals into klusta (time x chan) or spyking
     circus (chan x time) binary format (.dat)
 
@@ -1494,12 +1498,18 @@ def save_binary_format(filename, signal, spikesorter='klusta'):
         fdat = filename + '_klusta.dat'
         print('Saving ', fdat)
         with open(fdat, 'wb') as f:
-            np.transpose(np.array(signal, dtype='float32')).tofile(f)
+            np.transpose(np.array(signal, dtype=dtype)).tofile(f)
     elif spikesorter is 'spykingcircus':
         fdat = filename + '_spycircus.dat'
         print('Saving ', fdat)
         with open(fdat, 'wb') as f:
-            np.array(signal, dtype='float32').tofile(f)
+            np.array(signal, dtype=dtype).tofile(f)
+    elif spikesorter == 'kilosort' or spikesorter == 'none':
+        if not filename.endswith('dat'):
+            filename += '.dat'
+        print('saving ', filename)
+        with open(filename, 'wb') as f:
+            np.transpose(np.array(signal, dtype=dtype)).tofile(f)
 
 
 def create_klusta_prm(pathname, prb_path, nchan=32, fs=30000,
