@@ -34,10 +34,11 @@ def svd_whiten(X):
     # will be white
     X_white = np.dot(U, Vt)
 
+
     return X_white
 
 
-def smoothICA(X, n_comp='all', L=1, lamb=0, mu=0, n_iter=500, EM=False):
+def smoothICA(X, n_comp='all', L=1, lamb=0, mu=0, n_iter=1000, EM=False):
     '''
 
     Parameters
@@ -58,55 +59,87 @@ def smoothICA(X, n_comp='all', L=1, lamb=0, mu=0, n_iter=500, EM=False):
         n_comp = n_comp
 
     n_features = X.shape[0]
-
+    n_obs = X.shape[1]
+    batch_size = int(0.1*n_obs)
     # whiten data
-    data = svd_whiten(X)
-    learning_rate = 5e-2
-    display_step = 50
+    pca = PCA(n_components=n_comp, whiten=True)
+    pca.fit(X)
+    data = pca.components_
+    learning_rate = 1e2
+    display_step = 20
 
     seed=np.random.seed(2308)
     # Launch the raph
     sess = tf.Session()
 
+    nonlin_mat = []
+
     if L == 1:
-        Z = tf.constant(data, dtype=np.float32)
+        # Z = tf.constant(data, dtype=np.float32)
+        Z = tf.placeholder("float", shape=[n_comp, None])
         W = weight_variable((n_comp, n_features), name='demixing', seed=seed)
+        W = tf.divide(W, tf.norm(W))
         I = tf.constant(np.eye(n_comp, n_features), dtype=np.float32)
         
         y = tf.matmul(W, Z)
         # nonlin = tf.divide(tf.matmul(my_pow(y, 3), my_pow(y, 1./3.), transpose_b=True),
         #                    tf.constant(n_features, dtype=np.float32))
-        nonlin = tf.divide(tf.matmul(tf.pow(y, 3), tf.tanh(y), transpose_b=True),
-                           tf.constant(n_features, dtype=np.float32))
+
+        #term_1 = tf.divide(1-tf.exp(-y), 1+tf.exp(-y))
+        term_1 = tf.pow(y, 3)
+
+        #term_2 = y
+        term_2 = tf.atan(y)
+
+        nonlin = tf.matmul(term_1, term_2, transpose_b=True)
+        # nonlin = tf.divide(nonlin, tf.reduce_max(nonlin))
+        nonlin = tf.divide(nonlin, n_obs)
+
 
         square = tf.square(tf.subtract(nonlin, I))
         err = tf.reduce_sum(tf.square(tf.subtract(nonlin, I)))
+        # err = tf.reduce_sum(tf.square(tf.subtract(nonlin, tf.diag_part(nonlin))))
 
         train_step = tf.train.AdamOptimizer(learning_rate).minimize(err)
         sess.run(tf.global_variables_initializer())
+        sess.as_default()
 
         ############
         # TRAINING #
         ############
         t_start = time.time()
         for epoch in range(n_iter):
+            idxs = np.random.permutation(n_obs)[:batch_size]
+            train_batch = data[:, idxs]
             # print sess.run(nonlin)[:5, :5]
-            sess.run(train_step)
+            sess.run(train_step, feed_dict={Z: train_batch})
             # Display logs per epoch step
             if (epoch + 1) % display_step == 0:
-                train_err = sess.run(err)
+                train_err = sess.run(err, feed_dict={Z: train_batch})
                 print "Step:", '%04d' % (epoch + 1), "Cost=", "{:.9f}".format(train_err)
                 print 'Elapsed time: ', time.time() - t_start
+                #print 'nonlin diag: ', sess.run(tf.diag_part(nonlin))
+
+                nonlin_mat.append(sess.run(nonlin, feed_dict={Z: train_batch}))
 
         W_opt = sess.run(W)
-        y_opt = sess.run(y)
+        y_opt = sess.run(y, feed_dict={Z: data})
         A_opt = np.linalg.inv(W_opt)
     else:
         W_opt = []
         y_opt = []
         A_opt = []
 
-    return y_opt, A_opt, W_opt
+    return y_opt, A_opt, W_opt, nonlin_mat
+
+def return_training_data(num, n_obs):
+    # random_idxs = np.random.choice(self.num_train_spikes, num)
+    # elems = tf.convert_to_tensor(range(self.num_train_spikes))
+    samples = tf.multinomial(tf.log([[10.] * n_obs]), num)  # note log-prob
+    random_idxs = samples[0].eval()
+    # print random_idxs
+
+    return random_idxs
 
 
 

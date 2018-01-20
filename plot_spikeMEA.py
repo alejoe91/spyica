@@ -781,9 +781,7 @@ def plot_probe(mea_pos, mea_pitch, shape='square', elec_dim=10, axis=None, xlim=
         ax.set_ylim(ylim)
 
 
-
-
-def plot_mea_recording(spikes, mea_pos, mea_pitch, color='k', points=False):
+def plot_mea_recording(spikes, mea_pos, mea_pitch, color='k', points=False, lw=1):
     # create mea
     number_electrode = mea_pos.shape[0]
 
@@ -810,19 +808,18 @@ def plot_mea_recording(spikes, mea_pos, mea_pitch, color='k', points=False):
         b = 0.05+(mea_pos[el, 2] - z_pitch/2. + zoffset) / z_width * 0.9
 
         rect = l, b, w, h
-        #print l, b, w, h
 
         ax = fig.add_axes(rect)
         if len(spikes.shape) == 3:  # multiple
             if points:
-                ax.plot(np.transpose(spikes[:, el, :]), linestyle='-', marker='o', ms=2)
+                ax.plot(np.transpose(spikes[:, el, :]), linestyle='-', marker='o', ms=2, lw=lw)
             else:
-                ax.plot(np.transpose(spikes[:, el, :]))
+                ax.plot(np.transpose(spikes[:, el, :]), lw=lw)
         else:
             if points:
-                ax.plot(spikes[el, :], color=color, linestyle='-', marker='o', ms=2)
+                ax.plot(spikes[el, :], color=color, linestyle='-', marker='o', ms=2, lw=lw)
             else:
-                ax.plot(spikes[el, :], color=color)
+                ax.plot(spikes[el, :], color=color, lw=lw)
 
         ax.set_ylim([np.min(spikes), np.max(spikes)])
         ax.set_xticks([])

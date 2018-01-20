@@ -14,10 +14,11 @@ import quantities as pq
 import json
 import yaml
 import time
+import multiprocessing
 
 import spiketrain_generator as stg
 from tools import *
-from plot_spikeMEA import *
+from neuroplot import *
 
 root_folder = os.getcwd()
 
@@ -53,9 +54,9 @@ class GenST:
         self.overlap_threshold = float(over)
         self.sync_rate = float(sync)
         self.spike_modulation=modulation
-
         self.save=save
 
+        parallel=True
 
         print 'Loading spikes and MEA'
         val_folder = join(os.getcwd(), self.spike_folder, 'validation_data')
@@ -201,29 +202,48 @@ class GenST:
         self.exp = 0.3
         self.n_isi = 5
         self.mem_isi = 10*pq.ms
-        for st in self.spgen.all_spiketrains:
-            amp, cons = ISI_amplitude_modulation(st, mrand=self.mrand, sdrand=self.sdrand,
-                                                 n_spikes=self.n_isi, exp=self.exp, mem_ISI=self.mem_isi)
-            self.amp_mod.append(amp)
-            self.cons_spikes.append(cons)
-
+        if self.spike_modulation == 'all':
+            for st in self.spgen.all_spiketrains:
+                amp, cons = ISI_amplitude_modulation(st, mrand=self.mrand, sdrand=self.sdrand,
+                                                     n_spikes=self.n_isi, exp=self.exp, mem_ISI=self.mem_isi)
+                self.amp_mod.append(amp)
+                self.cons_spikes.append(cons)
+        elif self.spike_modulation == 'noise':
+            for st in self.spgen.all_spiketrains:
+                amp, cons = ISI_amplitude_modulation(st, mrand=self.mrand, sdrand=self.sdrand,
+                                                     n_spikes=0, exp=self.exp, mem_ISI=self.mem_isi)
+                self.amp_mod.append(amp)
+                self.cons_spikes.append(cons)
         print 'Generating clean recordings'
         self.recordings = np.zeros((n_elec, n_samples))
 
         # modulated convolution
-        for st in range(spike_matrix.shape[0]):
-            print 'Convolving with spike ', st, ' out of ', spike_matrix.shape[0]
-            if not self.spike_modulation:
-                for el in range(n_elec):
-                    self.recordings[el] += np.convolve(spike_matrix[st, :], self.templates[st, el], mode='same')
+        # TODO add multiprocessing
+        pool = multiprocessing.Pool(n_cells)
+        t_start = time.time()
+
+        if not parallel:
+            for st, spike_bin in enumerate(spike_matrix):
+                print 'Convolving with spike ', st, ' out of ', spike_matrix.shape[0]
+                if self.spike_modulation == 'none':
+                    self.recordings += convolve_templates_spiketrains(spike_bin, templates[st])
+                else:
+                    self.recordings += convolve_templates_spiketrains(spike_bin, templates[st], modulation=True,
+                                                                      amp_mod=self.amp_mod[st])
+        else:
+            if self.spike_modulation == 'none':
+                results = [pool.apply_async(convolve_templates_spiketrains, (spike_bin, templates[st],))
+                           for st, spike_bin in enumerate(spike_matrix)]
             else:
-                spike_pos = np.where(spike_matrix[st, :]==1)[0]
-                for pos, spos in enumerate(spike_pos):
-                    single_spike_array = np.zeros_like(spike_matrix[st, :])
-                    single_spike_array[spos] = 1
-                    for el in range(n_elec):
-                        self.recordings[el] += np.convolve(single_spike_array,
-                                                           self.amp_mod[st][pos]*self.templates[st, el], mode='same')
+                results = [pool.apply_async(convolve_templates_spiketrains, (spike_bin, templates[st], True, amp))
+                           for st, (spike_bin, amp) in enumerate(zip(spike_matrix, self.amp_mod))]
+            for r in results:
+                self.recordings += r.get()
+
+        pool.close()
+
+        print 'Elapsed time ', time.time() - t_start
+
 
 
         print 'Adding noise'
@@ -332,6 +352,24 @@ class GenST:
 
         print 'Saved ', self.rec_path
 
+def convolve_templates_spiketrains(spike_bin, template, modulation=False, amp_mod=None):
+    n_elec = template.shape[0]
+    n_samples = len(spike_bin)
+    recordings = np.zeros((n_elec, n_samples))
+    if not modulation:
+        for el in range(n_elec):
+            recordings[el] += np.convolve(spike_bin, template[el], mode='same')
+    else:
+        assert amp_mod is not None
+        spike_pos = np.where(spike_bin == 1)[0]
+        for pos, spos in enumerate(spike_pos):
+            single_spike_array = np.zeros_like(spike_bin)
+            single_spike_array[spos] = 1
+            for el in range(n_elec):
+                recordings[el] += np.convolve(single_spike_array,
+                                              amp_mod[pos] * template[el], mode='same')
+    return recordings
+
 
 if __name__ == '__main__':
     '''
@@ -425,9 +463,12 @@ if __name__ == '__main__':
     else:
         filter=True
     if '-nomod' in sys.argv:
-        modulation=False
+        modulation='none'
     else:
-        modulation=True
+        modulation='all'
+    if '-noisemod' in sys.argv:
+        modulation='noise'
+
     if len(sys.argv) == 1:
         print 'Arguments: \n   -f filename\n   -dur duration\n   -freq sampling frequency (in kHz)\n   ' \
               '-ncells number of cells\n' \
@@ -439,7 +480,7 @@ if __name__ == '__main__':
     elif '-f' not in sys.argv:
         raise AttributeError('Provide model folder for data')
     else:
-        gs = GenST(save=True, spike_folder=spike_folder, fs=freq, n_cells=ncells, p_exc=pexc, duration=dur,
+        gs = GenST(save=False, spike_folder=spike_folder, fs=freq, n_cells=ncells, p_exc=pexc, duration=dur,
                    bound_x=bx, min_amp=minamp, noise_mode=noise, noise_level=noiselev, f_exc=fexc, f_inh=finh,
                    filter=filter, over=over, sync=sync, modulation=modulation, min_dist=mindist)
 

@@ -5,7 +5,8 @@
 import numpy as np
 from sklearn.decomposition import FastICA
 
-def instICA(X, n_comp='all'):
+#TODO chunks to increase speed
+def instICA(X, n_comp='all', n_chunks=1, chunk_size=None):
     """Performs instantaneous ICA.
 
     Parameters
@@ -25,8 +26,37 @@ def instICA(X, n_comp='all'):
     if n_comp == 'all':
         n_comp = X.shape[0]
 
+    n_obs = X.shape[1]
+
+    if n_chunks > 1:
+        if chunk_size is None:
+            raise AttributeError('Chunk size (n_samples) is required')
+        else:
+            assert chunk_size*n_chunks < n_obs
+            chunk_init = []
+            idxs = []
+            for c in range(n_chunks):
+                proceed = False
+                i = 0
+                while not proceed and i<1000:
+                    c_init = np.random.randint(n_obs-n_chunks-1)
+                    proceed = True
+                    for prev_c in chunk_init:
+                        if c_init > prev_c and c_init < c_init + chunk_size:
+                            proceed = False
+                            i += 1
+                            print 'failed ', i
+
+                idxs.extend(range(c_init, c_init + chunk_size))
+
+            X_reduced = X[:, idxs]
+            print X_reduced.shape
+    else:
+        X_reduced = X
+
     ica = FastICA(n_components=n_comp)
-    sources = np.transpose(ica.fit_transform(np.transpose(X)))
+    ica.fit(np.transpose(X_reduced))
+    sources = np.transpose(ica.transform(np.transpose(X)))
     A = ica.mixing_
     W = ica.components_
 

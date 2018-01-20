@@ -1003,7 +1003,9 @@ def ISI_amplitude_modulation(st, mrand=1, sdrand=0.05, n_spikes=1, exp=0.5, mem_
     cons = np.zeros(len(st))
 
     for i, isi in enumerate(ISI):
-        if n_spikes == 1:
+        if n_spikes == 0:
+            amp_mod[i + 1] = sdrand * np.random.randn() + mrand
+        elif n_spikes == 1:
             if isi > mem_ISI:
                 amp_mod[i + 1] = sdrand * np.random.randn() + mrand
             else:
@@ -1168,9 +1170,18 @@ def cluster_spike_amplitudes(spike_amps, sst, metric='cal', min_sihlo=0.8, min_c
 
     return reduced_sst, reduced_amps, nclusters, keep_id, score
 
+def cc_max_spiketrains(st, st_id, other_st):
+    from elephant.spike_train_correlation import cch, corrcoef
 
+    cc_vec = np.zeros(len(other_st))
+    for p, p_st in enumerate(other_st):
+        cc, bin_ids = cch(st, p_st, kernel=np.hamming(100))
+        central_bin = len(cc) // 2
+        # normalize by number of spikes
+        cc_vec[p] = np.max(cc[central_bin-10:central_bin+10]) #/ (len(st) + len(p_st))
+    return st_id, cc_vec
 
-def evaluate_spiketrains(gtst, sst, t_jitt = 1*pq.ms, overlapping=False):
+def evaluate_spiketrains(gtst, sst, t_jitt = 1*pq.ms, overlapping=False, parallel=True, nprocesses=None):
     '''
 
     Parameters
@@ -1178,28 +1189,50 @@ def evaluate_spiketrains(gtst, sst, t_jitt = 1*pq.ms, overlapping=False):
     gtst
     sst
     t_jitt
-    overlapping_pairs
+    overlapping
+    parallel
+    nprocesses
 
     Returns
     -------
 
     '''
     import neo
+    import multiprocessing
     from elephant.spike_train_correlation import cch, corrcoef
+
+    if nprocesses is None:
+        num_cores = len(gtst)
+    else:
+        num_cores = nprocesses
 
     t_stop = gtst[0].t_stop
 
     or_mat, original_st = bin_spiketimes(gtst, T=1*pq.ms, t_stop=t_stop)
     pr_mat, predicted_st = bin_spiketimes(sst, T=1*pq.ms, t_stop=t_stop)
-
     cc_matr = np.zeros((or_mat.shape[0], pr_mat.shape[0]))
 
-    for o, o_st in enumerate(original_st):
-        for p, p_st in enumerate(predicted_st):
-            cc, bin_ids = cch(o_st, p_st, kernel=np.hamming(100))
-            central_bin = len(cc) // 2
-            # normalize by number of spikes
-            cc_matr[o, p] = np.max(cc[central_bin-10:central_bin+10]) / (len(gtst[o]) + len(sst[p])) # (abs(len(gtst[o]) - len(sst[p])) + 1)
+    if parallel:
+        pool = multiprocessing.Pool(nprocesses)
+        results = [pool.apply_async(cc_max_spiketrains, (st, st_id, predicted_st,))
+                   for st_id, st in enumerate(original_st)]
+
+        idxs = []
+        cc_vecs = []
+        for result in results:
+            idxs.append(result.get()[0])
+            cc_vecs.append(result.get()[1])
+
+        for (id, cc_vec) in zip(idxs, cc_vecs):
+            cc_matr[id] = [c / (len(gtst[id]) + len(sst[i])) for i, c in enumerate(cc_vec)]
+        pool.close()
+    else:
+        for o, o_st in enumerate(original_st):
+            for p, p_st in enumerate(predicted_st):
+                cc, bin_ids = cch(o_st, p_st, kernel=np.hamming(100))
+                central_bin = len(cc) // 2
+                # normalize by number of spikes
+                cc_matr[o, p] = np.max(cc[central_bin-10:central_bin+10]) / (len(gtst[o]) + len(sst[p])) # (abs(len(gtst[o]) - len(sst[p])) + 1)
     cc_matr /= np.max(cc_matr)
 
     best_pairs = np.array([])
@@ -1245,6 +1278,14 @@ def evaluate_spiketrains(gtst, sst, t_jitt = 1*pq.ms, overlapping=False):
                     # print 'Out of spiketrains'
                     put_pairs[pp] = np.array([-1, -1], dtype=int)
 
+    [gt.annotate(paired=False) for gt in gtst]
+    [st.annotate(paired=False) for st in sst]
+    for pp in put_pairs:
+        if pp[0] != -1:
+            gtst[pp[0]].annotate(paired=True)
+        if pp[1] != -1:
+            sst[pp[1]].annotate(paired=True)
+
     # shift best match by max lag
     for gt_i, gt in enumerate(gtst):
         pair = put_pairs[gt_i]
@@ -1266,13 +1307,22 @@ def evaluate_spiketrains(gtst, sst, t_jitt = 1*pq.ms, overlapping=False):
                 sst[pair[1]][idx_before] = sst[pair[1]].t_start
 
     # Evaluate
+
+    # mark all spikes as unpaired
+    for gt in gtst:
+        lab_gt = np.array(['UNPAIRED'] * len(gt))
+        gt.annotate(labels=lab_gt)
+    for st in sst:
+        lab_st = np.array(['UNPAIRED'] * len(st))
+        st.annotate(labels=lab_st)
+
     t_jitt = 2*pq.ms
     print 'Finding TP'
     for gt_i, gt in enumerate(gtst):
         if put_pairs[gt_i, 0] != -1:
-            lab_gt = np.array(['UNPAIRED'] * len(gt))
+            lab_gt = gt.annotations['labels']
             st = sst[put_pairs[gt_i, 1]]
-            lab_st = np.array(['UNPAIRED'] * len(st))
+            lab_st = st.annotations['labels']
             # from gtst: TP, TPO, TPSO, FN, FNO, FNSO
             for sp_i, t_sp in enumerate(gt):
                 id_sp = np.where((st > t_sp - t_jitt) & (st < t_sp + t_jitt))[0]
@@ -1295,11 +1345,11 @@ def evaluate_spiketrains(gtst, sst, t_jitt = 1*pq.ms, overlapping=False):
             lab_gt = np.array(['FN'] * len(gt))
         gt.annotate(labels=lab_gt)
 
-    # if unpaired SST
-    for st in sst:
-        if 'labels' not in st.annotations:
-            lab_st = np.array(['UNPAIRED'] * len(st))
-            st.annotate(labels=lab_st)
+    # # if unpaired SST
+    # for st in sst:
+    #     if 'labels' not in st.annotations:
+    #         lab_st = np.array(['UNPAIRED'] * len(st))
+    #         st.annotate(labels=lab_st)
 
     # find CL-CLO-CLSO
     print 'Finding CL'
@@ -1308,24 +1358,29 @@ def evaluate_spiketrains(gtst, sst, t_jitt = 1*pq.ms, overlapping=False):
         for lab_i, lab in enumerate(lab_gt):
             if lab == 'UNPAIRED':
                 for st_i, st in enumerate(sst):
-                    t_up = gt[lab_i]
-                    id_sp = np.where((st > t_up - t_jitt) & (st < t_up + t_jitt))[0]
-                    lab_st = st.annotations['labels']
-                    if len(id_sp) == 1 and lab_st[id_sp] == 'UNPAIRED':
-                        if 'overlap' in gt.annotations.keys():
-                            if gt.annotations['overlap'][lab_i] == 'NO':
+                    if st.annotations['paired']:
+                        t_up = gt[lab_i]
+                        id_sp = np.where((st > t_up - t_jitt) & (st < t_up + t_jitt))[0]
+                        lab_st = st.annotations['labels']
+                        if len(id_sp) == 1 and lab_st[id_sp] == 'UNPAIRED':
+                            if 'overlap' in gt.annotations.keys():
+                                if gt.annotations['overlap'][lab_i] == 'NO':
+                                    lab_gt[lab_i] = 'CL'
+                                    if lab_st[id_sp] == 'UNPAIRED':
+                                        lab_st[id_sp] = 'CL_NP'
+                                elif gt.annotations['overlap'][lab_i] == 'O':
+                                    lab_gt[lab_i] = 'CLO'
+                                    if lab_st[id_sp] == 'UNPAIRED':
+                                        lab_st[id_sp] = 'CLO_NP'
+                                elif gt.annotations['overlap'][lab_i] == 'SO':
+                                    lab_gt[lab_i] = 'CLSO'
+                                    if lab_st[id_sp] == 'UNPAIRED':
+                                        lab_st[id_sp] = 'CLSO_NP'
+                            else:
                                 lab_gt[lab_i] = 'CL'
-                                lab_st[id_sp] = 'CL'
-                            elif gt.annotations['overlap'][lab_i] == 'O':
-                                lab_gt[lab_i] = 'CLO'
-                                lab_st[id_sp] = 'CLO'
-                            elif gt.annotations['overlap'][lab_i] == 'SO':
-                                lab_gt[lab_i] = 'CLSO'
-                                lab_st[id_sp] = 'CLSO'
-                        else:
-                            lab_gt[lab_i] = 'CL'
-                            lab_st[id_sp] = 'CL'
-                    st.annotate(labels=lab_st)
+                                if lab_st[id_sp] == 'UNPAIRED':
+                                    lab_st[id_sp] = 'CL_NP'
+                        st.annotate(labels=lab_st)
         gt.annotate(labels=lab_gt)
 
     print 'Finding FP and FN'
@@ -1361,12 +1416,12 @@ def evaluate_spiketrains(gtst, sst, t_jitt = 1*pq.ms, overlapping=False):
 
     print 'TP :', TP, TPO, TPSO, TP+TPO+TPSO
 
-    CL = sum([len(np.where('CL' == gt.annotations['labels'])[0]) for gt in gtst]) + \
-         sum([len(np.where('CL' == st.annotations['labels'])[0]) for st in sst])
-    CLO = sum([len(np.where('CLO' == gt.annotations['labels'])[0]) for gt in gtst]) + \
-          sum([len(np.where('CLO' == st.annotations['labels'])[0]) for st in sst])
-    CLSO = sum([len(np.where('CLSO' == gt.annotations['labels'])[0]) for gt in gtst]) + \
-           sum([len(np.where('CLSO' == st.annotations['labels'])[0]) for st in sst])
+    CL = sum([len(np.where('CL' == gt.annotations['labels'])[0]) for gt in gtst])\
+         # + sum([len(np.where('CL' == st.annotations['labels'])[0]) for st in sst])
+    CLO = sum([len(np.where('CLO' == gt.annotations['labels'])[0]) for gt in gtst]) \
+          # + sum([len(np.where('CLO' == st.annotations['labels'])[0]) for st in sst])
+    CLSO = sum([len(np.where('CLSO' == gt.annotations['labels'])[0]) for gt in gtst]) \
+           # + sum([len(np.where('CLSO' == st.annotations['labels'])[0]) for st in sst])
 
     print 'CL :', CL, CLO, CLSO, CL+CLO+CLSO
 
@@ -1424,7 +1479,7 @@ def annotate_overlapping(gtst, t_jitt = 1*pq.ms, overlapping_pairs=None, verbose
                                 #     print 'found overlap! spike 1: ', i, t_i, ' spike 2: ', j, st_j[id_over]
         st_i.annotate(overlap=over)
 
-def raster_plots(st, bintype=False, ax=None, overlap=None, color_st=None, fs=10):
+def raster_plots(st, bintype=False, ax=None, overlap=False, labels=False, color_st=None, fs=10):
     '''
 
     Parameters
@@ -1449,7 +1504,7 @@ def raster_plots(st, bintype=False, ax=None, overlap=None, color_st=None, fs=10)
             elif spiketrain.annotations['bintype'] == 'INHIB':
                 ax.plot(t, i * np.ones_like(t), 'r.', markersize=5)
         else:
-            if overlap is None:
+            if not overlap and not labels:
                 if np.any(color_st):
                     import seaborn as sns
                     colors = sns.color_palette("Paired", len(color_st))
@@ -1460,13 +1515,25 @@ def raster_plots(st, bintype=False, ax=None, overlap=None, color_st=None, fs=10)
                         ax.plot(t, i * np.ones_like(t), 'k.', markersize=5)
                 else:
                     ax.plot(t, i * np.ones_like(t), 'k.', markersize=5)
-            else:
+            elif overlap:
                 for j, t_sp in enumerate(spiketrain):
                     if spiketrain.annotations['overlap'][j] == 'SO':
                         ax.plot(t_sp, i, 'r.', markersize=5)
                     elif spiketrain.annotations['overlap'][j] == 'O':
                         ax.plot(t_sp, i, 'g.', markersize=5)
                     elif spiketrain.annotations['overlap'][j] == 'NO':
+                        ax.plot(t_sp, i, 'k.', markersize=5)
+            elif labels:
+                for j, t_sp in enumerate(spiketrain):
+                    if 'TP' in spiketrain.annotations['labels'][j]:
+                        ax.plot(t_sp, i, 'g.', markersize=5)
+                    elif 'CL' in spiketrain.annotations['labels'][j]:
+                        ax.plot(t_sp, i, 'y.', markersize=5)
+                    elif 'FN' in spiketrain.annotations['labels'][j]:
+                        ax.plot(t_sp, i, 'r.', markersize=5)
+                    elif 'FP' in spiketrain.annotations['labels'][j]:
+                        ax.plot(t_sp, i, 'm.', markersize=5)
+                    else:
                         ax.plot(t_sp, i, 'k.', markersize=5)
 
     ax.axis('tight')
@@ -1495,21 +1562,30 @@ def save_binary_format(filename, signal, spikesorter='klusta', dtype='float32'):
     -------
     """
     if spikesorter is 'klusta':
-        fdat = filename + '_klusta.dat'
-        print('Saving ', fdat)
-        with open(fdat, 'wb') as f:
+        if not filename.endswith('dat'):
+            filename += '.dat'
+        print 'saving ', filename
+        with open(filename, 'wb') as f:
             np.transpose(np.array(signal, dtype=dtype)).tofile(f)
     elif spikesorter is 'spykingcircus':
-        fdat = filename + '_spycircus.dat'
-        print('Saving ', fdat)
-        with open(fdat, 'wb') as f:
+        if not filename.endswith('dat'):
+            filename += '.dat'
+        print 'saving ', filename
+        with open(filename, 'wb') as f:
+            np.array(signal, dtype=dtype).tofile(f)
+    elif spikesorter is 'yass':
+        if not filename.endswith('dat'):
+            filename += '.dat'
+        print 'saving ', filename
+        with open(filename, 'wb') as f:
             np.array(signal, dtype=dtype).tofile(f)
     elif spikesorter == 'kilosort' or spikesorter == 'none':
         if not filename.endswith('dat'):
             filename += '.dat'
-        print('saving ', filename)
+        print 'saving ', filename
         with open(filename, 'wb') as f:
             np.transpose(np.array(signal, dtype=dtype)).tofile(f)
+    return filename
 
 
 def create_klusta_prm(pathname, prb_path, nchan=32, fs=30000,
@@ -1576,8 +1652,10 @@ def create_klusta_prm(pathname, prb_path, nchan=32, fs=30000,
                 # "\n\tnum_cpus=4,)")
     return full_filename
 
+
 def export_prb_file(n_elec, electrode_name, pathname,
-                    pos=None, adj_dist=None, graph=True, geometry=True, separate_channels=False):
+                    pos=None, adj_dist=None, graph=True, geometry=True, separate_channels=False,
+                    spikesorter='klusta', radius=100):
 
     assert pathname is not None
     abspath = os.path.abspath(pathname)
@@ -1596,6 +1674,9 @@ def export_prb_file(n_elec, electrode_name, pathname,
     print 'Saving ', full_filename
     with open(full_filename, 'w') as f:
         f.write('\n')
+        if spikesorter=='spykingcircus':
+            f.write('total_nb_channels = ' + str(n_elec) + '\n')
+            f.write('radius = ' + str(radius) + '\n')
         f.write('channel_groups = {\n')
         if not separate_channels:
             f.write("    0: ")
