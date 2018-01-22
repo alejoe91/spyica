@@ -1578,7 +1578,7 @@ def save_binary_format(filename, signal, spikesorter='klusta', dtype='float32'):
             filename += '.dat'
         print 'saving ', filename
         with open(filename, 'wb') as f:
-            np.array(signal, dtype=dtype).tofile(f)
+            np.transpose(np.array(signal, dtype=dtype)).tofile(f)
     elif spikesorter == 'kilosort' or spikesorter == 'none':
         if not filename.endswith('dat'):
             filename += '.dat'

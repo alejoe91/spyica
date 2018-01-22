@@ -15,6 +15,7 @@ import json
 import yaml
 import time
 import multiprocessing
+from copy import copy
 
 import spiketrain_generator as stg
 from tools import *
@@ -235,7 +236,7 @@ class GenST:
                 results = [pool.apply_async(convolve_templates_spiketrains, (spike_bin, templates[st],))
                            for st, spike_bin in enumerate(spike_matrix)]
             else:
-                results = [pool.apply_async(convolve_templates_spiketrains, (spike_bin, templates[st], True, amp))
+                results = [pool.apply_async(convolve_templates_spiketrains, (st, spike_bin, templates[st], True, amp))
                            for st, (spike_bin, amp) in enumerate(zip(spike_matrix, self.amp_mod))]
             for r in results:
                 self.recordings += r.get()
@@ -244,13 +245,13 @@ class GenST:
 
         print 'Elapsed time ', time.time() - t_start
 
-
+        self.clean_recordings = copy(self.recordings)
 
         print 'Adding noise'
         if self.noise_level > 0:
             if noise_mode == 'uncorrelated':
-                additive_noise = self.noise_level * np.random.randn(self.recordings.shape[0], self.recordings.shape[1])
-                self.recordings += additive_noise
+                self.additive_noise = self.noise_level * np.random.randn(self.recordings.shape[0], self.recordings.shape[1])
+                self.recordings += self.additive_noise
             elif noise_mode == 'correlated-dist':
                 # TODO divide in chunks
                 cov_dist = np.zeros((n_elec, n_elec))
@@ -261,9 +262,9 @@ class GenST:
                         else:
                             cov_dist[i, j] = 1
 
-                additive_noise = np.random.multivariate_normal(np.zeros(n_elec), cov_dist,
+                self.additive_noise = np.random.multivariate_normal(np.zeros(n_elec), cov_dist,
                                                                size=(self.recordings.shape[0], self.recordings.shape[1]))
-                self.recordings += additive_noise
+                self.recordings += self.additive_noise
         else:
             print 'Noise level is seto to 0'
 
@@ -277,7 +278,7 @@ class GenST:
                 self.recordings = filter_analog_signals(self.recordings, freq=self.bp, fs=self.fs)
             self.times = np.arange(self.recordings.shape[1])/self.fs
             if plot_rec:
-                plot_mea_recording(self.recordings, self.mea_pos, self.mea_dim, color='g')
+                plot_mea_recording(self.recordings, self.mea_pos, self.mea_pitch, color='g')
 
         if self.save:
             self.save_spikes()
@@ -297,7 +298,7 @@ class GenST:
                             + str(self.noise_level) + '_' + str(self.f_exc).replace(' ', '') + '_' \
                             + str(self.f_inh).replace(' ', '') + '_nonmodulated' \
                             + '_' + time.strftime("%d-%m-%Y:%H:%M")
-        rec_dir = join(root_folder, 'recordings')
+        rec_dir = join(root_folder, 'recordings', 'convolution')
         self.rec_path = join(rec_dir, self.rec_name)
         os.makedirs(self.rec_path)
         # Save meta_info yaml
@@ -352,7 +353,8 @@ class GenST:
 
         print 'Saved ', self.rec_path
 
-def convolve_templates_spiketrains(spike_bin, template, modulation=False, amp_mod=None):
+def convolve_templates_spiketrains(spike_id, spike_bin, template, modulation=False, amp_mod=None):
+    print 'START: convolution with spike ', spike_id
     n_elec = template.shape[0]
     n_samples = len(spike_bin)
     recordings = np.zeros((n_elec, n_samples))
@@ -368,6 +370,7 @@ def convolve_templates_spiketrains(spike_bin, template, modulation=False, amp_mo
             for el in range(n_elec):
                 recordings[el] += np.convolve(single_spike_array,
                                               amp_mod[pos] * template[el], mode='same')
+    print 'DONE: convolution with spike ', spike_id
     return recordings
 
 
@@ -480,7 +483,7 @@ if __name__ == '__main__':
     elif '-f' not in sys.argv:
         raise AttributeError('Provide model folder for data')
     else:
-        gs = GenST(save=False, spike_folder=spike_folder, fs=freq, n_cells=ncells, p_exc=pexc, duration=dur,
+        gs = GenST(save=True, spike_folder=spike_folder, fs=freq, n_cells=ncells, p_exc=pexc, duration=dur,
                    bound_x=bx, min_amp=minamp, noise_mode=noise, noise_level=noiselev, f_exc=fexc, f_inh=finh,
                    filter=filter, over=over, sync=sync, modulation=modulation, min_dist=mindist)
 

@@ -28,7 +28,7 @@ recordings:
   # channels spatial radius
   spatial_radius: 70
   # temporal length of wavforms in ms
-  spike_size_ms: 5
+  spike_size_ms: 1
 
 preprocess:
   # apply butterworth filter in the preprocessing step

@@ -60,12 +60,13 @@ def smoothICA(X, n_comp='all', L=1, lamb=0, mu=0, n_iter=1000, EM=False):
 
     n_features = X.shape[0]
     n_obs = X.shape[1]
-    batch_size = int(0.1*n_obs)
+    batch_size = int(0.3*n_obs)
     # whiten data
     pca = PCA(n_components=n_comp, whiten=True)
     pca.fit(X)
     data = pca.components_
-    learning_rate = 1e2
+
+    learning_rate = 1e4
     display_step = 20
 
     seed=np.random.seed(2308)
@@ -73,6 +74,7 @@ def smoothICA(X, n_comp='all', L=1, lamb=0, mu=0, n_iter=1000, EM=False):
     sess = tf.Session()
 
     nonlin_mat = []
+    nonlin_inv_mat = []
 
     if L == 1:
         # Z = tf.constant(data, dtype=np.float32)
@@ -82,25 +84,37 @@ def smoothICA(X, n_comp='all', L=1, lamb=0, mu=0, n_iter=1000, EM=False):
         I = tf.constant(np.eye(n_comp, n_features), dtype=np.float32)
         
         y = tf.matmul(W, Z)
-        # nonlin = tf.divide(tf.matmul(my_pow(y, 3), my_pow(y, 1./3.), transpose_b=True),
-        #                    tf.constant(n_features, dtype=np.float32))
+        # TODO: try fastICA non-gaussianity
+        v = tf.random_normal((1, 1000000))
 
-        #term_1 = tf.divide(1-tf.exp(-y), 1+tf.exp(-y))
-        term_1 = tf.pow(y, 3)
+        def G(tensor):
+            # return tf.log(tf.cosh(tensor))
+            #return tf.negative(tf.exp(tf.divide(tf.negative(tensor), 2)))
+            return tf.pow(tensor, 3)
 
-        #term_2 = y
-        term_2 = tf.atan(y)
+        # def G_kurt(tensor):
+        #     return tf.pow(tensor, 4)
 
-        nonlin = tf.matmul(term_1, term_2, transpose_b=True)
-        # nonlin = tf.divide(nonlin, tf.reduce_max(nonlin))
-        nonlin = tf.divide(nonlin, n_obs)
-
-
-        square = tf.square(tf.subtract(nonlin, I))
-        err = tf.reduce_sum(tf.square(tf.subtract(nonlin, I)))
-        # err = tf.reduce_sum(tf.square(tf.subtract(nonlin, tf.diag_part(nonlin))))
-
+        err = tf.divide(1., tf.square(tf.subtract(tf.reduce_mean(G(y)), tf.reduce_mean(G(v)))))
+        # err = tf.divide(1., tf.reduce_mean(G_kurt(y)))
         train_step = tf.train.AdamOptimizer(learning_rate).minimize(err)
+
+        # #term_1 = tf.divide(1-tf.exp(-y), 1+tf.exp(-y))
+        # term_1 = tf.pow(y, 3)
+        # #term_2 = y
+        # term_2 = tf.atan(y)
+        #
+        # nonlin = tf.matmul(term_1, term_2, transpose_b=True)
+        # nonlin = tf.divide(nonlin, n_obs)
+        #
+        # nonlin_inv = tf.matmul(term_2, term_1, transpose_b=True)
+        # nonlin_inv = tf.divide(nonlin, n_obs)
+        #
+        # square = tf.square(tf.subtract(nonlin, I))
+        # err = tf.reduce_sum(tf.square(tf.subtract(nonlin, I)))
+        # err = tf.reduce_sum(tf.square(tf.subtract(nonlin, tf.diag_part(nonlin))))
+        # train_step = tf.train.AdamOptimizer(learning_rate).minimize(err)
+
         sess.run(tf.global_variables_initializer())
         sess.as_default()
 
@@ -118,9 +132,15 @@ def smoothICA(X, n_comp='all', L=1, lamb=0, mu=0, n_iter=1000, EM=False):
                 train_err = sess.run(err, feed_dict={Z: train_batch})
                 print "Step:", '%04d' % (epoch + 1), "Cost=", "{:.9f}".format(train_err)
                 print 'Elapsed time: ', time.time() - t_start
+
+                print sess.run(tf.reduce_mean(v))
                 #print 'nonlin diag: ', sess.run(tf.diag_part(nonlin))
 
-                nonlin_mat.append(sess.run(nonlin, feed_dict={Z: train_batch}))
+                # nonlin_mat.append(sess.run(nonlin, feed_dict={Z: train_batch}))
+                # nonlin_inv_mat.append(sess.run(nonlin_inv, feed_dict={Z: train_batch}))
+
+        # todo: show Gert that it doesn't work because it optimizes the chosen function (if y**2)
+        # sources are note independent
 
         W_opt = sess.run(W)
         y_opt = sess.run(y, feed_dict={Z: data})
@@ -130,7 +150,7 @@ def smoothICA(X, n_comp='all', L=1, lamb=0, mu=0, n_iter=1000, EM=False):
         y_opt = []
         A_opt = []
 
-    return y_opt, A_opt, W_opt, nonlin_mat
+    return y_opt, A_opt, W_opt #, nonlin_mat, nonlin_inv_mat
 
 def return_training_data(num, n_obs):
     # random_idxs = np.random.choice(self.num_train_spikes, num)
