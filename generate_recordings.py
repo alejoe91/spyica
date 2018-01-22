@@ -23,18 +23,12 @@ from neuroplot import *
 
 root_folder = os.getcwd()
 
-plt.ion()
-plt.show()
-plot_raster = True
-plot_temp = False
-plot_rec = True
-
 #TODO add bursting events
 
 class GenST:
     def __init__(self, save=False, spike_folder=None, fs=None, noise_mode=None, n_cells=None, p_exc=None,
                  bound_x=None, min_amp=None, noise_level=None, duration=None, f_exc=None, f_inh=None,
-                 filter=True, over=None, sync=None, modulation=True, min_dist=None):
+                 filter=True, over=None, sync=None, modulation=True, min_dist=None, plot_figures=True):
 
         np.random.seed(2308)
 
@@ -56,6 +50,7 @@ class GenST:
         self.sync_rate = float(sync)
         self.spike_modulation=modulation
         self.save=save
+        self.plot_figures = plot_figures
 
         parallel=True
 
@@ -114,7 +109,7 @@ class GenST:
         self.templates_bin = bin_cat[idxs_cells]
         templates = spikes[idxs_cells]
 
-        if plot_temp:
+        if self.plot_figures:
             plot_mea_recording(templates[0], self.mea_pos, self.mea_dim, color='r')
 
 
@@ -151,7 +146,7 @@ class GenST:
         self.splines = np.array(templates_spl)
 
 
-        if plot_temp:
+        if self.plot_figures:
             plot_mea_recording(self.templates[0], self.mea_pos, self.mea_dim)
 
 
@@ -163,7 +158,7 @@ class GenST:
                                              process='poisson', t_start=0*pq.s, t_stop=self.duration)
 
         self.spgen.generate_spikes()
-        if plot_raster:
+        if self.plot_figures:
             ax = self.spgen.raster_plots()
             ax.set_title('Before synchrony')
 
@@ -185,7 +180,7 @@ class GenST:
         #             st = bursting_st(freq=st.annotations['freq'])
 
 
-        if plot_raster:
+        if self.plot_figures:
             ax = self.spgen.raster_plots()
             ax.set_title('After synchrony')
 
@@ -277,7 +272,7 @@ class GenST:
             else:
                 self.recordings = filter_analog_signals(self.recordings, freq=self.bp, fs=self.fs)
             self.times = np.arange(self.recordings.shape[1])/self.fs
-            if plot_rec:
+            if self.plot_figures:
                 plot_mea_recording(self.recordings, self.mea_pos, self.mea_pitch, color='g')
 
         if self.save:
@@ -469,6 +464,10 @@ if __name__ == '__main__':
         modulation='none'
     else:
         modulation='all'
+    if '-noplot' in sys.argv:
+        plot_figures=False
+    else:
+        plot_figures=True
     if '-noisemod' in sys.argv:
         modulation='noise'
 
@@ -485,7 +484,8 @@ if __name__ == '__main__':
     else:
         gs = GenST(save=True, spike_folder=spike_folder, fs=freq, n_cells=ncells, p_exc=pexc, duration=dur,
                    bound_x=bx, min_amp=minamp, noise_mode=noise, noise_level=noiselev, f_exc=fexc, f_inh=finh,
-                   filter=filter, over=over, sync=sync, modulation=modulation, min_dist=mindist)
+                   filter=filter, over=over, sync=sync, modulation=modulation, min_dist=mindist, 
+                   plot_figures=plot_figures)
 
 
 
