@@ -37,8 +37,10 @@ class SpikeSorter:
             split = os.path.split(rec_folder)[0]
             self.rec_name = os.path.split(split)[-1]
 
-        print plot_figures
         self.plot_figures = plot_figures
+        if self.plot_figures:
+            plt.ion()
+            plt.show()
 
         self.duration = duration
         self.tstart = tstart
@@ -52,7 +54,7 @@ class SpikeSorter:
         sys.path.append(self.root)
 
         self.clustering = 'mog'
-        self.threshold = 4.5
+        self.threshold = 6
 
         self.minimum_spikes_per_cluster = 3
 
