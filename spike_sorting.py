@@ -28,13 +28,6 @@ import smoothICA as sICA
 
 root_folder = os.getcwd()
 
-plt.ion()
-plt.show()
-self.plot_figures = False
-self.plot_figures = False
-self.plot_figures = True
-
-
 class SpikeSorter:
     def __init__(self, save=False, rec_folder=None, alg=None, lag=None, gfmode=None, duration=None,
                  tstart=None, tstop=None, run_ss=None, plot_figures=True):
@@ -44,7 +37,8 @@ class SpikeSorter:
             split = os.path.split(rec_folder)[0]
             self.rec_name = os.path.split(split)[-1]
 
-        self.plot_figures=plot_figures
+        print plot_figures
+        self.plot_figures = plot_figures
 
         self.duration = duration
         self.tstart = tstart
