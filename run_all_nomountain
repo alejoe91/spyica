@@ -1,12 +1,21 @@
 #!/bin/bash
-# define recording
-REC=recordings/convolution/recording_physrot_Neuronexus-32-cut-30_5_10.0s_uncorrelated_5.0_5.0Hz_15.0Hz_modulated_23-01-2018_18_36
 
-# Basic for loop
-sorters='ica klusta kilosort spykingcircus yass'
-for ss in $sorters
-do
-echo $ss
-python spike_sorting.py -r $REC -mod $ss
-done
-echo All done
+if [ $# == 0 ];
+  then
+    echo "Supply recording path"
+else
+    if [ $# == 1 ] && [ "$1" == "all" ];
+      then
+        echo "Spikesorting all recordings"
+    else
+        rec=$1
+        # Basic for loop
+        sorters='ica klusta kilosort spykingcircus yass'
+        for ss in $sorters
+        do
+        echo $ss
+        python spike_sorting.py -r $rec -mod $ss
+        done
+        echo All done
+    fi
+fi
