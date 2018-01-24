@@ -22,8 +22,8 @@ from tools import *
 from plot_spikeMEA import *
 import ICA as ica
 import smoothICA as sICA
-from sfa.incsfa import IncSFANode
-from sfa.trainer import TrainerNode
+# from sfa.incsfa import IncSFANode
+# from sfa.trainer import TrainerNode
 # import sfa.incsfa as sfa
 
 root_folder = os.getcwd()
