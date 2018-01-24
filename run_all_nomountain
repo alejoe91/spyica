@@ -14,7 +14,7 @@ else
         for ss in $sorters
         do
         echo $ss
-        python spike_sorting.py -r $rec -mod $ss
+        python spike_sorting.py -r $rec -mod $ss -noplot
         done
         echo All done
     fi

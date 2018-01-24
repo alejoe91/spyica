@@ -30,19 +30,21 @@ root_folder = os.getcwd()
 
 plt.ion()
 plt.show()
-plot_source = False
-plot_cc = False
-plot_rasters = True
+self.plot_figures = False
+self.plot_figures = False
+self.plot_figures = True
 
 
 class SpikeSorter:
     def __init__(self, save=False, rec_folder=None, alg=None, lag=None, gfmode=None, duration=None,
-                 tstart=None, tstop=None, run_ss=None):
+                 tstart=None, tstop=None, run_ss=None, plot_figures=True):
         self.rec_folder = rec_folder
         self.rec_name = os.path.split(rec_folder)[-1]
         if self.rec_name == '':
             split = os.path.split(rec_folder)[0]
             self.rec_name = os.path.split(split)[-1]
+
+        self.plot_figures=plot_figures
 
         self.duration = duration
         self.tstart = tstart
@@ -219,14 +221,14 @@ class SpikeSorter:
                 self.s_ica, self.A_ica, self.W_ica = ica.instICA(self.recordings,
                                                                  n_chunks=n_chunks, chunk_size=chunk_size)
 
-                if plot_source:
+                if self.plot_figures:
                     plot_mea_recording(self.s_ica, self.mea_pos, self.mea_dim, color='r')
 
                 # clean sources based on skewness and correlation
                 spike_sources, self.source_idx, self.correlated_pairs = clean_sources(self.s_ica,
                                                                                       corr_thresh=self.corr_thresh,
                                                                                       skew_thresh=self.skew_thresh)
-                if plot_source:
+                if self.plot_figures:
                     plt.figure()
                     plt.plot(np.transpose(spike_sources))
 
@@ -339,14 +341,14 @@ class SpikeSorter:
                 print 'Elapsed time: ', self.processing_time
 
                 self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
-                if plot_cc:
+                if self.plot_figures:
                     plt.figure()
                     plt.imshow(self.cc_matr)
                 print 'PAIRS: ', self.pairs
 
                 self.performance =  compute_performance(self.counts)
 
-                if plot_rasters:
+                if self.plot_figures:
                     fig = plt.figure()
                     ax1 = fig.add_subplot(211)
                     ax2 = fig.add_subplot(212)
@@ -370,14 +372,14 @@ class SpikeSorter:
                 t_start = time.time()
                 self.s_sica, self.A_sica, self.W_sica, self.nonlin = sICA.smoothICA(self.recordings) #, self.nonlin, self.nonlin_inv
 
-                if plot_source:
+                if self.plot_figures:
                     plot_mea_recording(self.s_sica, self.mea_pos, self.mea_dim, color='r')
 
                 # clean sources based on skewness and correlation
                 spike_sources, self.source_idx, self.correlated_pairs = clean_sources(self.s_sica,
                                                                                       corr_thresh=self.corr_thresh,
                                                                                       skew_thresh=self.skew_thresh)
-                if plot_source:
+                if self.plot_figures:
                     plt.figure()
                     plt.plot(np.transpose(spike_sources))
 
@@ -416,14 +418,14 @@ class SpikeSorter:
                 # print 'Elapsed time: ', time.time() - t_start
                 #
                 # self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
-                # if plot_cc:
+                # if self.plot_figures:
                 #     plt.figure()
                 #     plt.imshow(self.cc_matr)
                 # print self.pairs
                 #
                 # self.performance =  compute_performance(self.counts)
                 #
-                # if plot_rasters:
+                # if self.plot_figures:
                 #     fig = plt.figure()
                 #     ax1 = fig.add_subplot(211)
                 #     ax2 = fig.add_subplot(212)
@@ -497,14 +499,14 @@ class SpikeSorter:
                     raise Exception('No kwik file!')
 
                 self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
-                if plot_cc:
+                if self.plot_figures:
                     plt.figure()
                     plt.imshow(self.cc_matr)
                 print 'PAIRS: ', self.pairs
 
                 self.performance =  compute_performance(self.counts)
 
-                if plot_rasters:
+                if self.plot_figures:
                     fig = plt.figure()
                     ax1 = fig.add_subplot(211)
                     ax2 = fig.add_subplot(212)
@@ -621,14 +623,14 @@ class SpikeSorter:
 
                 print 'Evaluating spiketrains...'
                 self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
-                if plot_cc:
+                if self.plot_figures:
                     plt.figure()
                     plt.imshow(self.cc_matr)
                 print 'PAIRS: ', self.pairs
 
                 self.performance = compute_performance(self.counts)
 
-                if plot_rasters:
+                if self.plot_figures:
                     fig = plt.figure()
                     ax1 = fig.add_subplot(211)
                     ax2 = fig.add_subplot(212)
@@ -734,14 +736,14 @@ class SpikeSorter:
 
                 print 'Evaluating spiketrains...'
                 self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
-                if plot_cc:
+                if self.plot_figures:
                     plt.figure()
                     plt.imshow(self.cc_matr)
                 print 'PAIRS: ', self.pairs
 
                 self.performance =  compute_performance(self.counts)
 
-                if plot_rasters:
+                if self.plot_figures:
                     fig = plt.figure()
                     ax1 = fig.add_subplot(211)
                     ax2 = fig.add_subplot(212)
@@ -843,14 +845,14 @@ class SpikeSorter:
 
                 print 'Evaluating spiketrains...'
                 self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
-                if plot_cc:
+                if self.plot_figures:
                     plt.figure()
                     plt.imshow(self.cc_matr)
                 print 'PAIRS: ', self.pairs
 
                 self.performance =  compute_performance(self.counts)
 
-                if plot_rasters:
+                if self.plot_figures:
                     fig = plt.figure()
                     ax1 = fig.add_subplot(211)
                     ax2 = fig.add_subplot(212)
@@ -951,14 +953,14 @@ class SpikeSorter:
 
                 print 'Evaluating spiketrains...'
                 self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
-                if plot_cc:
+                if self.plot_figures:
                     plt.figure()
                     plt.imshow(self.cc_matr)
                 print 'PAIRS: ', self.pairs
 
                 self.performance = compute_performance(self.counts)
 
-                if plot_rasters:
+                if self.plot_figures:
                     fig = plt.figure()
                     ax1 = fig.add_subplot(211)
                     ax2 = fig.add_subplot(212)
@@ -1079,6 +1081,10 @@ if __name__ == '__main__':
         spikesort=False
     else:
         spikesort=True
+    if '-noplot' in sys.argv:
+        plot_figures=False
+    else:
+        plot_figures=True
 
     if len(sys.argv) == 1:
         print 'Arguments: \n   -r recording filename\n   -mod ICA - cICA - smooth - gfICA - klusta' \
@@ -1094,7 +1100,7 @@ if __name__ == '__main__':
         raise AttributeError('Provide model folder for data')
     else:
         sps = SpikeSorter(save=True, rec_folder=rec_folder, alg=mod, lag=lag, gfmode=gfmode, duration=dur,
-                          tstart=tstart, tstop=tstop, run_ss=spikesort)
+                          tstart=tstart, tstop=tstop, run_ss=spikesort, plot_figures=plot_figures)
 
         #
         # if self.cica:
@@ -1104,13 +1110,13 @@ if __name__ == '__main__':
         #         self.s_cica, self.A_cica, self.W_cica = ica.cICAemb(self.recordings, L=self.lag)
         #         print 'Elapsed time: ', time.time() - t_start
         #
-        #         if plot_source:
+        #         if self.plot_figures:
         #             plot_mea_recording(self.s_cica, self.mea_pos, self.mea_dim, color='r')
         #
         #         # clean sources based on skewness and correlation
         #         spike_sources, self.source_idx, self.correlated_pairs = clean_sources(self.s_cica, corr_thresh=self.corr_thresh,
         #                                                                               skew_thresh=self.skew_thresh)
-        #         if plot_source:
+        #         if self.plot_figures:
         #             plt.figure()
         #             plt.plot(np.transpose(spike_sources))
         #
@@ -1132,14 +1138,14 @@ if __name__ == '__main__':
         #         self.cica_spike_sources = self.cleaned_sources_cica[self.independent_spike_idx]
         #
         #         self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
-        #         if plot_cc:
+        #         if self.plot_figures:
         #             plt.figure()
         #             plt.imshow(self.cc_matr)
         #         print self.pairs
         #
         #         self.performance =  compute_performance(self.counts)
         #
-        #         if plot_rasters:
+        #         if self.plot_figures:
         #             fig = plt.figure()
         #             ax1 = fig.add_subplot(211)
         #             ax2 = fig.add_subplot(212)
@@ -1166,7 +1172,7 @@ if __name__ == '__main__':
         #         #
         #         # print 'Elapsed time: ', time.time() - t_start
         #
-        #         if plot_source:
+        #         if self.plot_figures:
         #             plot_mea_recording(self.s_gfica[:n_elec], self.mea_pos, self.mea_dim, color='r')
         #             plot_mea_recording(self.s_gfica[:n_elec], self.mea_pos, self.mea_dim, color='g')
         #             plot_mea_recording(self.s_gfica[:n_elec], self.mea_pos, self.mea_dim, color='bhn')
@@ -1176,7 +1182,7 @@ if __name__ == '__main__':
         #                                                                               corr_thresh=self.corr_thresh,
         #                                                                               skew_thresh=self.skew_thresh)
         #
-        #         if plot_source:
+        #         if self.plot_figures:
         #             plt.figure()
         #             plt.plot(np.transpose(spike_sources))
         #
@@ -1199,14 +1205,14 @@ if __name__ == '__main__':
         #         self.gfica_spike_sources = self.cleaned_sources_gfica[self.independent_spike_idx]
         #
         #         self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
-        #         if plot_cc:
+        #         if self.plot_figures:
         #             plt.figure()
         #             plt.imshow(self.cc_matr)
         #         print self.pairs
         #
         #         self.performance =  compute_performance(self.counts)
         #
-        #         if plot_rasters:
+        #         if self.plot_figures:
         #             fig = plt.figure()
         #             ax1 = fig.add_subplot(211)
         #             ax2 = fig.add_subplot(212)
