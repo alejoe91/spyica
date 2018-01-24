@@ -17,8 +17,26 @@ rez                = fullMPMU(rez, DATA);% extract final spike times (overlappin
 
 rez = merge_posthoc2(rez); % merge obtained spikes (mimic Phy user action)
 
+%Fix merge problems (https://github.com/kwikteam/phy-contrib/issues/132)
+
+if(~isequal(rez.st3(:,2),rez.st3(:,5)))
+    %ids are shifted off by one in the merged version
+    rez.st3(:,5)=rez.st3(:,5)-1;
+    %find empty slots
+    un=unique(rez.st3(:,5));
+    empties=setdiff(1:max(un),un);
+    if isempty(empties), error('why empty?'); end
+end
+
+%set cluster that did have id=0 to an empty slot
+rez.st3(rez.st3(:,5)==-1,5)=empties(1);
+
 % save python results file for Phy
-mkdir('results')
-rezToPhy(rez, fullfile(pwd, 'results'));
-toc
+mkdir('process')
+rezToPhy(rez, fullfile(pwd, 'process'));
+
+elapsed_time = toc;
+fid = fopen(fullfile(pwd, 'process', 'time.txt'), 'w');
+fprintf(fid, '%f', elapsed_time);
+
 

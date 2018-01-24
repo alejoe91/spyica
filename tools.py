@@ -848,7 +848,7 @@ def integrate_sources(sources):
     return integ_source
 
 
-def clean_sources(sources, corr_thresh=0.4, skew_thresh=0.5):
+def clean_sources(sources, corr_thresh=0.7, skew_thresh=0.5):
     '''
 
     Parameters
@@ -1042,8 +1042,7 @@ def ISI_amplitude_modulation(st, mrand=1, sdrand=0.05, n_spikes=1, exp=0.5, mem_
     return amp_mod, cons
 
 def cluster_spike_amplitudes(spike_amps, sst, metric='cal', min_sihlo=0.8, min_cal=150, max_clusters=4,
-                             alg='kmeans'):
-    #TODO keep remove cluster as separate spike trains and search among them if unique
+                             alg='kmeans', keep_all=False):
     '''
 
     Parameters
@@ -1054,6 +1053,8 @@ def cluster_spike_amplitudes(spike_amps, sst, metric='cal', min_sihlo=0.8, min_c
     min_sihlo
     min_cal
     max_clusters
+    alg
+    keep_all
 
     Returns
     -------
@@ -1126,11 +1127,18 @@ def cluster_spike_amplitudes(spike_amps, sst, metric='cal', min_sihlo=0.8, min_c
                         reduced_amps.append(amps)
                         keep_id.append(range(len(sst[i])))
                     else:
-                        highest_clust = np.argmin(kmeans.cluster_centers_)
-                        highest_idx = np.where(labels==highest_clust)[0]
-                        reduced_sst.append(sst[i][highest_idx])
-                        reduced_amps.append(amps[highest_idx])
-                        keep_id.append(highest_idx)
+                        if keep_all:
+                            for clust in np.unique(labels):
+                                idxs = np.where(labels == clust)[0]
+                                reduced_sst.append(sst[i][idxs])
+                                reduced_amps.append(amps[idxs])
+                                keep_id.append(idxs)
+                        else:
+                            highest_clust = np.argmin(kmeans.cluster_centers_)
+                            highest_idx = np.where(labels==highest_clust)[0]
+                            reduced_sst.append(sst[i][highest_idx])
+                            reduced_amps.append(amps[highest_idx])
+                            keep_id.append(highest_idx)
                 elif metric == 'cal':
                     if cal_har < min_cal:
                         nclusters[i] = 1
@@ -1138,20 +1146,31 @@ def cluster_spike_amplitudes(spike_amps, sst, metric='cal', min_sihlo=0.8, min_c
                         reduced_amps.append(amps)
                         keep_id.append(range(len(sst[i])))
                     else:
-                        if alg=='kmeans':
-                            highest_clust = np.argmin(kmeans.cluster_centers_)
-                        elif alg == 'mog':
-                            highest_clust = np.argmin(gmm.means_)
-                        highest_idx = np.where(labels==highest_clust)[0]
-                        red_spikes = sst[i][highest_idx]
-                        if 'ica_amp' in red_spikes.annotations:
-                            red_spikes.annotate(ica_amp=red_spikes.annotations['ica_amp'])
-                        if 'ica_wf' in red_spikes.annotations:
-                            red_spikes.annotate(ica_wf=red_spikes.annotations['ica_wf'])
-                        reduced_sst.append(red_spikes)
-                        reduced_amps.append(amps[highest_idx])
-                        keep_id.append(highest_idx)
-
+                        if keep_all:
+                            for clust in np.unique(labels):
+                                idxs = np.where(labels == clust)[0]
+                                red_spikes = sst[i][idxs]
+                                if 'ica_amp' in red_spikes.annotations:
+                                    red_spikes.annotate(ica_amp=red_spikes.annotations['ica_amp'])
+                                if 'ica_wf' in red_spikes.annotations:
+                                    red_spikes.annotate(ica_wf=red_spikes.annotations['ica_wf'])
+                                reduced_sst.append(red_spikes)
+                                reduced_amps.append(amps[idxs])
+                                keep_id.append(idxs)
+                        else:
+                            if alg=='kmeans':
+                                highest_clust = np.argmin(kmeans.cluster_centers_)
+                            elif alg == 'mog':
+                                highest_clust = np.argmin(gmm.means_)
+                            highest_idx = np.where(labels==highest_clust)[0]
+                            red_spikes = sst[i][highest_idx]
+                            if 'ica_amp' in red_spikes.annotations:
+                                red_spikes.annotate(ica_amp=red_spikes.annotations['ica_amp'])
+                            if 'ica_wf' in red_spikes.annotations:
+                                red_spikes.annotate(ica_wf=red_spikes.annotations['ica_wf'])
+                            reduced_sst.append(red_spikes)
+                            reduced_amps.append(amps[highest_idx])
+                            keep_id.append(highest_idx)
                 silhos[i] = silho
                 cal_hars[i] = cal_har
             else:

@@ -55,8 +55,8 @@ class SpikeSorter:
         self.root = os.getcwd()
         sys.path.append(self.root)
 
-        self.clustering = 'kmeans'
-        self.alg = 'kmeans'
+        self.clustering = 'mog'
+        self.threshold = 4.5
 
         self.minimum_spikes_per_cluster = 3
 
@@ -208,6 +208,12 @@ class SpikeSorter:
             if self.run_ss:
                 print 'Applying instantaneous ICA'
                 t_start = time.time()
+                t_start_proc = time.time()
+
+                if not os.path.isdir(join(self.rec_folder, 'ica')):
+                    os.makedirs(join(self.rec_folder, 'ica'))
+                self.ica_folder = join(self.rec_folder, 'ica')
+
                 chunk_size = int(2*pq.s * self.fs.rescale('Hz'))
                 n_chunks = 1
                 self.s_ica, self.A_ica, self.W_ica = ica.instICA(self.recordings,
@@ -231,13 +237,14 @@ class SpikeSorter:
 
                 if self.clustering=='kmeans' or self.clustering=='mog':
                     # detect spikes and align
-                    self.spike_trains = detect_and_align(spike_sources, self.fs, self.recordings,
-                                                         t_start=self.gtst[0].t_start,
-                                                         t_stop=self.gtst[0].t_stop)
-                    self.spike_amps = [sp.annotations['ica_amp'] for sp in self.spike_trains]
+                    self.detected_spikes = detect_and_align(spike_sources, self.fs, self.recordings,
+                                                            t_start=self.gtst[0].t_start,
+                                                            t_stop=self.gtst[0].t_stop, n_std=self.threshold)
+                    self.spike_amps = [sp.annotations['ica_amp'] for sp in self.detected_spikes]
 
-                    self.sst, self.amps, self.nclusters, keep, score = \
-                        cluster_spike_amplitudes(self.spike_amps, self.spike_trains, metric='cal', alg=self.alg)
+                    self.spike_trains, self.amps, self.nclusters, keep, score = \
+                        cluster_spike_amplitudes(self.spike_amps, self.detected_spikes, metric='cal',
+                                                 alg=self.clustering)
 
                     # TODO look into discurded clusters if unknown spiketrains are found
                     # for each source, keep the spikes cluster with largest amplitude
@@ -252,10 +259,11 @@ class SpikeSorter:
                     #     else:
                     #         self.sst.append(self.possible_sst[sst_idx])
 
-                    self.sst, self.independent_spike_idx, self.dup = reject_duplicate_spiketrains(self.sst)
+                    self.spike_trains, self.independent_spike_idx, self.dup = reject_duplicate_spiketrains(self.spike_trains)
 
                     self.ica_spike_sources_idx = self.source_idx[self.independent_spike_idx]
                     self.ica_spike_sources = self.cleaned_sources_ica[self.independent_spike_idx]
+                    self.sst = self.spike_trains
 
                 elif self.clustering=='klusta':
                     if not os.path.isdir(join(self.rec_folder, 'ica')):
@@ -266,14 +274,28 @@ class SpikeSorter:
                         rec_name = os.path.split(rec_name[0])[-1]
                     else:
                         rec_name = rec_name[-1]
-                    self.klusta_full_path = join(self.klusta_folder, rec_name)
+                    self.klusta_full_path = join(self.klusta_folder, 'recording')
                     # create prb and prm files
                     prb_path = export_prb_file(self.cleaned_sources_ica.shape[0], 'ica', self.klusta_folder,
                                                geometry=False, graph=False, separate_channels=True)
-                    klusta_prm = create_klusta_prm(self.klusta_full_path, prb_path, nchan=self.cleaned_sources_ica.shape[0],
-                                                   fs=self.fs, klusta_filter=False)
                     # save binary file
-                    save_binary_format(self.klusta_full_path, self.cleaned_sources_ica, spikesorter='klusta')
+                    filename = join(self.klusta_folder, 'recordings')
+                    file_path = save_binary_format(join(self.klusta_folder, 'recordings'), self.cleaned_sources_ica,
+                                                   spikesorter='klusta')
+
+                    # set up klusta config file
+                    with open(join(self.root, 'spikesorter_files', 'klusta_files',
+                                   'config.prm'), 'r') as f:
+                        klusta_config = f.readlines()
+
+                    nchan = self.cleaned_sources_ica.shape[0]
+                    threshold = self.threshold
+
+                    klusta_config = ''.join(klusta_config).format(
+                        filename, prb_path, float(self.fs.rescale('Hz')), nchan, 'float32', threshold
+                    )
+                    with open(join(self.klusta_folder, 'config.prm'), 'w') as f:
+                        f.writelines(klusta_config)
 
                     print('Running klusta')
 
@@ -285,7 +307,7 @@ class SpikeSorter:
 
                     import subprocess
                     try:
-                        subprocess.check_output(['klusta', klusta_prm, '--overwrite'])
+                        subprocess.check_output(['klusta', join(self.klusta_folder, 'config.prm'), '--overwrite'])
                     except subprocess.CalledProcessError as e:
                         raise Exception(e.output)
 
@@ -295,34 +317,34 @@ class SpikeSorter:
                         if os.path.exists(kwikfile):
                             kwikio = neo.io.KwikIO(filename=kwikfile, )
                             blk = kwikio.read_block(raw_data_units='uV')
-                            self.possible_sst = blk.segments[0].spiketrains
+                            self.detected_spikes = blk.segments[0].spiketrains
                     else:
                         raise Excaption('No kwik file!')
 
-                    self.spike_trains, self.independent_spike_idx = reject_duplicate_spiketrains(self.possible_sst)
+                    self.spike_trains, self.independent_spike_idx = reject_duplicate_spiketrains(self.detected_spikes)
                     self.ica_spike_sources = self.cleaned_sources_ica[self.independent_spike_idx]
                     # self.spike_amps = [sp.annotations['ica_amp'] for sp in self.spike_trains]
                     self.sst = self.spike_trains
 
                 else:
-                    self.spike_trains = detect_and_align(spike_sources, self.fs, self.recordings,
-                                                          t_start=self.gtst[0].t_start,
-                                                          t_stop=self.gtst[0].t_stop)
-                    self.spike_trains, self.independent_spike_idx, self.dup = reject_duplicate_spiketrains(self.spike_trains)
+                    self.detected_spikes = detect_and_align(spike_sources, self.fs, self.recordings,
+                                                            t_start=self.gtst[0].t_start,
+                                                            t_stop=self.gtst[0].t_stop)
+                    self.spike_trains, self.independent_spike_idx, self.dup = reject_duplicate_spiketrains(self.detected_spikes)
                     self.ica_spike_sources = self.cleaned_sources_ica[self.independent_spike_idx]
                     self.spike_amps = [sp.annotations['ica_amp'] for sp in self.spike_trains]
                     self.sst = self.spike_trains
 
-
-                print 'Elapsed time: ', time.time() - t_start
+                self.processing_time = time.time() - t_start_proc
+                print 'Elapsed time: ', self.processing_time
 
                 self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
                 if plot_cc:
                     plt.figure()
                     plt.imshow(self.cc_matr)
-                print self.pairs
+                print 'PAIRS: ', self.pairs
 
-                performance = compute_performance(self.counts)
+                self.performance =  compute_performance(self.counts)
 
                 if plot_rasters:
                     fig = plt.figure()
@@ -334,11 +356,19 @@ class SpikeSorter:
 
                     ax1.set_title('ICA', fontsize=20)
 
+                # save results
+                if not os.path.isdir(join(self.ica_folder, 'results')):
+                    os.makedirs(join(self.ica_folder, 'results'))
+                np.save(join(self.ica_folder, 'results', 'counts'), self.counts)
+                np.save(join(self.ica_folder, 'results', 'performance'), self.performance)
+                np.save(join(self.ica_folder, 'results', 'time'), self.processing_time)
+
+
         if self.smooth:
             if self.run_ss:
                 print 'Applying smoothed ICA'
                 t_start = time.time()
-                self.s_sica, self.A_sica, self.W_sica = sICA.smoothICA(self.recordings) #, self.nonlin, self.nonlin_inv
+                self.s_sica, self.A_sica, self.W_sica, self.nonlin = sICA.smoothICA(self.recordings) #, self.nonlin, self.nonlin_inv
 
                 if plot_source:
                     plot_mea_recording(self.s_sica, self.mea_pos, self.mea_dim, color='r')
@@ -354,174 +384,54 @@ class SpikeSorter:
                 self.cleaned_sources_sica = spike_sources
                 print 'Number of cleaned sources: ', self.cleaned_sources_sica.shape[0]
 
+                plt.matshow(self.nonlin[0])
+                plt.matshow(self.nonlin[-1])
+
                 # raise Exception()
 
-                print 'Clustering Sources with: ', self.clustering
-                if self.clustering=='kmeans':
-                    # detect spikes and align
-                    self.spike_trains = detect_and_align(spike_sources, self.fs, self.recordings,
-                                                         t_start=self.gtst[0].t_start,
-                                                         t_stop=self.gtst[0].t_stop)
-                    self.spike_amps = [sp.annotations['ica_amp'] for sp in self.spike_trains]
-
-                    self.sst, self.amps, self.nclusters, keep, score = \
-                        cluster_spike_amplitudes(self.spike_amps, self.spike_trains, metric='cal', alg=self.alg)
-                    self.sst, self.independent_spike_idx, self.duplicates = reject_duplicate_spiketrains(self.sst)
-
-                    self.sica_spike_sources_idx = self.source_idx[self.independent_spike_idx]
-                    self.sica_spike_sources = self.cleaned_sources_sica[self.independent_spike_idx]
-                else:
-                    self.spike_trains = detect_and_align(spike_sources, self.fs, self.recordings,
-                                                         t_start=self.gtst[0].t_start,
-                                                         t_stop=self.gtst[0].t_stop)
-                    self.spike_trains, self.independent_spike_idx = reject_duplicate_spiketrains(self.spike_trains)
-                    self.sica_spike_sources_idx = self.source_idx[self.independent_spike_idx]
-                    self.sica_spike_sources = self.cleaned_sources_sica[self.independent_spike_idx]
-                    self.spike_amps = [sp.annotations['ica_amp'] for sp in self.spike_trains]
-                    self.sst = self.spike_trains
-
-                print 'Elapsed time: ', time.time() - t_start
-
-                self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
-                if plot_cc:
-                    plt.figure()
-                    plt.imshow(self.cc_matr)
-                print self.pairs
-
-                performance = compute_performance(self.counts)
-
-                if plot_rasters:
-                    fig = plt.figure()
-                    ax1 = fig.add_subplot(211)
-                    ax2 = fig.add_subplot(212)
-
-                    raster_plots(self.gtst, color_st=self.pairs[:, 0], ax=ax1)
-                    raster_plots(self.sst, color_st=self.pairs[:, 1], ax=ax2)
-
-                    ax1.set_title('smoothICA', fontsize=20)
-
-        if self.cica:
-            if self.run_ss:
-                print 'Applying convolutive embedded ICA'
-                t_start = time.time()
-                self.s_cica, self.A_cica, self.W_cica = ica.cICAemb(self.recordings, L=self.lag)
-                print 'Elapsed time: ', time.time() - t_start
-
-                if plot_source:
-                    plot_mea_recording(self.s_cica, self.mea_pos, self.mea_dim, color='r')
-
-                # clean sources based on skewness and correlation
-                spike_sources, self.source_idx, self.correlated_pairs = clean_sources(self.s_cica, corr_thresh=self.corr_thresh,
-                                                                                      skew_thresh=self.skew_thresh)
-                if plot_source:
-                    plt.figure()
-                    plt.plot(np.transpose(spike_sources))
-
-                self.cleaned_sources_cica = spike_sources
-                print 'Number of cleaned sources: ', self.cleaned_sources_cica.shape[0]
-
-                # detect spikes and align
-                self.spike_trains = detect_and_align(spike_sources, self.fs, self.recordings,
-                                                     t_start=self.gtst[0].t_start,
-                                                     t_stop=self.gtst[0].t_stop)
-
-                self.spike_amps = [sp.annotations['ica_amp'] for sp in self.spike_trains]
-
-                self.sst, self.amps, self.nclusters, keep, score = \
-                    cluster_spike_amplitudes(self.spike_amps, self.spike_trains, metric='cal', alg=self.alg)
-
-                self.sst, self.independent_spike_idx, self.duplicates = reject_duplicate_spiketrains(self.sst)
-                self.cica_spike_sources_idx = self.source_idx[self.independent_spike_idx]
-                self.cica_spike_sources = self.cleaned_sources_cica[self.independent_spike_idx]
-
-                self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
-                if plot_cc:
-                    plt.figure()
-                    plt.imshow(self.cc_matr)
-                print self.pairs
-
-                performance = compute_performance(self.counts)
-
-                if plot_rasters:
-                    fig = plt.figure()
-                    ax1 = fig.add_subplot(211)
-                    ax2 = fig.add_subplot(212)
-
-                    sst_order = self.pairs[:, 1]
-
-                    raster_plots(self.gtst, color_st=self.pairs[:, 0], ax=ax1)
-                    raster_plots(self.sst, color_st=self.pairs[:, 1], ax=ax2)
-
-                    ax1.set_title('cICA GT', fontsize=20)
-                    ax2.set_title('cICA ST', fontsize=20)
-
-        if self.gfica:
-            if self.run_ss:
-                print 'Applying gradient-flow ICA'
-                t_start = time.time()
-                self.s_gfica, self.A_gfica, self.W_gfica = ica.gFICA(self.recordings, self.mea_dim, mode=self.gfmode)
-                # s_gf_int = integrate_sources(s_gf)
-                print 'Elapsed time: ', time.time() - t_start
-
-                # gf_mea = np.reshape(np.reshape(mea_pos, (mea_dim[0], mea_dim[1], mea_pos.shape[1]))[:-1, :-1],
-                #                     ((mea_dim[0]-1)*(mea_dim[1]-1), mea_pos.shape[1]))
-                # gf_dim = (mea_dim[0]-1, mea_dim[1]-1)
+                # print 'Clustering Sources with: ', self.clustering
+                # if self.clustering=='kmeans':
+                #     # detect spikes and align
+                #     self.spike_trains = detect_and_align(spike_sources, self.fs, self.recordings,
+                #                                          t_start=self.gtst[0].t_start,
+                #                                          t_stop=self.gtst[0].t_stop)
+                #     self.spike_amps = [sp.annotations['ica_amp'] for sp in self.spike_trains]
+                #
+                #     self.sst, self.amps, self.nclusters, keep, score = \
+                #         cluster_spike_amplitudes(self.spike_amps, self.spike_trains, metric='cal', alg=self.clustering)
+                #     self.sst, self.independent_spike_idx, self.duplicates = reject_duplicate_spiketrains(self.sst)
+                #
+                #     self.sica_spike_sources_idx = self.source_idx[self.independent_spike_idx]
+                #     self.sica_spike_sources = self.cleaned_sources_sica[self.independent_spike_idx]
+                # else:
+                #     self.spike_trains = detect_and_align(spike_sources, self.fs, self.recordings,
+                #                                          t_start=self.gtst[0].t_start,
+                #                                          t_stop=self.gtst[0].t_stop)
+                #     self.spike_trains, self.independent_spike_idx = reject_duplicate_spiketrains(self.spike_trains)
+                #     self.sica_spike_sources_idx = self.source_idx[self.independent_spike_idx]
+                #     self.sica_spike_sources = self.cleaned_sources_sica[self.independent_spike_idx]
+                #     self.spike_amps = [sp.annotations['ica_amp'] for sp in self.spike_trains]
+                #     self.sst = self.spike_trains
                 #
                 # print 'Elapsed time: ', time.time() - t_start
-
-                if plot_source:
-                    plot_mea_recording(self.s_gfica[:n_elec], self.mea_pos, self.mea_dim, color='r')
-                    plot_mea_recording(self.s_gfica[:n_elec], self.mea_pos, self.mea_dim, color='g')
-                    plot_mea_recording(self.s_gfica[:n_elec], self.mea_pos, self.mea_dim, color='bhn')
-
-                # clean sources based on skewness and correlation
-                spike_sources, self.source_idx, self.correlated_pairs = clean_sources(self.s_gfica,
-                                                                                      corr_thresh=self.corr_thresh,
-                                                                                      skew_thresh=self.skew_thresh)
-
-                if plot_source:
-                    plt.figure()
-                    plt.plot(np.transpose(spike_sources))
-
-                self.cleaned_sources_gfica = spike_sources
-                print 'Number of cleaned sources: ', self.cleaned_sources_gfica.shape[0]
-
-
-                # detect spikes and align
-                self.spike_trains = detect_and_align(spike_sources, self.fs, self.recordings,
-                                                     t_start=self.gtst[0].t_start,
-                                                     t_stop=self.gtst[0].t_stop)
-
-                self.spike_amps = [sp.annotations['ica_amp'] for sp in self.spike_trains]
-
-                self.sst, self.amps, self.nclusters, keep, score = \
-                    cluster_spike_amplitudes(self.spike_amps, self.spike_trains, metric='cal', alg=self.alg)
-
-                self.sst, self.independent_spike_idx, self.duplicates = reject_duplicate_spiketrains(self.sst)
-                self.gfica_spike_sources_idx = self.source_idx[self.independent_spike_idx]
-                self.gfica_spike_sources = self.cleaned_sources_gfica[self.independent_spike_idx]
-
-                self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
-                if plot_cc:
-                    plt.figure()
-                    plt.imshow(self.cc_matr)
-                print self.pairs
-
-                performance = compute_performance(self.counts)
-
-                if plot_rasters:
-                    fig = plt.figure()
-                    ax1 = fig.add_subplot(211)
-                    ax2 = fig.add_subplot(212)
-
-                    sst_order = self.pairs[:, 1]
-
-                    raster_plots(self.gtst, color_st=self.pairs[:, 0], ax=ax1)
-                    raster_plots(self.sst, color_st=self.pairs[:, 1], ax=ax2)
-
-                    ax1.set_title('gfICA GT', fontsize=20)
-                    ax2.set_title('gfICA ST', fontsize=20)
-
+                #
+                # self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
+                # if plot_cc:
+                #     plt.figure()
+                #     plt.imshow(self.cc_matr)
+                # print self.pairs
+                #
+                # self.performance =  compute_performance(self.counts)
+                #
+                # if plot_rasters:
+                #     fig = plt.figure()
+                #     ax1 = fig.add_subplot(211)
+                #     ax2 = fig.add_subplot(212)
+                #
+                #     raster_plots(self.gtst, color_st=self.pairs[:, 0], ax=ax1)
+                #     raster_plots(self.sst, color_st=self.pairs[:, 1], ax=ax2)
+                #
+                #     ax1.set_title('smoothICA', fontsize=20)
 
         if self.klusta:
             print 'Applying Klustakwik algorithm'
@@ -543,7 +453,6 @@ class SpikeSorter:
             filename = join(self.klusta_folder, 'recordings')
             file_path = save_binary_format(join(self.klusta_folder, 'recordings'), self.recordings,
                                            spikesorter='klusta')
-            print file_path
 
             # set up klusta config file
             with open(join(self.root, 'spikesorter_files', 'klusta_files',
@@ -551,7 +460,7 @@ class SpikeSorter:
                 klusta_config = f.readlines()
 
             nchan = self.recordings.shape[0]
-            threshold = 4.5
+            threshold = self.threshold
 
             klusta_config = ''.join(klusta_config).format(
                 filename, prb_path, float(self.fs.rescale('Hz')), nchan, 'float32', threshold
@@ -572,7 +481,8 @@ class SpikeSorter:
                 try:
                     t_start_proc = time.time()
                     subprocess.check_output(['klusta', join(self.klusta_folder, 'config.prm'), '--overwrite'])
-                    print 'Elapsed time: ', time.time() - t_start_proc
+                    self.processing_time = time.time() - t_start_proc
+                    print 'Elapsed time: ', self.processing_time
                 except subprocess.CalledProcessError as e:
                     raise Exception(e.output)
 
@@ -590,9 +500,9 @@ class SpikeSorter:
                 if plot_cc:
                     plt.figure()
                     plt.imshow(self.cc_matr)
-                print self.pairs
+                print 'PAIRS: ', self.pairs
 
-                performance = compute_performance(self.counts)
+                self.performance =  compute_performance(self.counts)
 
                 if plot_rasters:
                     fig = plt.figure()
@@ -606,6 +516,14 @@ class SpikeSorter:
 
                 print 'Elapsed time: ', time.time() - t_start
 
+                # save results
+                if not os.path.isdir(join(self.klusta_folder, 'results')):
+                    os.makedirs(join(self.klusta_folder, 'results'))
+                np.save(join(self.klusta_folder, 'results', 'counts'), self.counts)
+                np.save(join(self.klusta_folder, 'results', 'performance'), self.performance)
+                np.save(join(self.klusta_folder, 'results', 'time'), self.processing_time)
+
+
         if self.kilo:
             print 'Applying Kilosort algorithm'
 
@@ -615,7 +533,7 @@ class SpikeSorter:
             if not os.path.isdir(join(self.rec_folder, 'kilosort')):
                 os.makedirs(join(self.rec_folder, 'kilosort'))
             self.kilo_folder = join(self.rec_folder, 'kilosort')
-            self.kilo_results_folder = join(self.kilo_folder, 'results')
+            self.kilo_process_folder = join(self.kilo_folder, 'process')
             rec_name = os.path.split(self.rec_folder)
             if rec_name[-1] == '':
                 rec_name = os.path.split(rec_name[0])[-1]
@@ -627,7 +545,7 @@ class SpikeSorter:
                                self.recordings,
                                spikesorter='kilosort',
                                dtype='int16')
-            threshold = 4.
+            threshold = self.threshold
 
             # set up kilosort config files and run kilosort on data
             with open(join(self.root, 'spikesorter_files', 'kilosort_files',
@@ -675,9 +593,12 @@ class SpikeSorter:
                 os.chdir(self.root)
 
                 print 'Parsing output files...'
-                self.spike_times = np.load(join(self.kilo_results_folder, 'spike_times.npy'))
-                self.spike_clusters = np.load(join(self.kilo_results_folder, 'spike_clusters.npy'))
-                self.spike_templates = np.load(join(self.kilo_results_folder, 'templates.npy')).swapaxes(1, 2)
+                self.spike_times = np.load(join(self.kilo_process_folder, 'spike_times.npy'))
+                self.spike_clusters = np.load(join(self.kilo_process_folder, 'spike_clusters.npy'))
+                self.spike_templates = np.load(join(self.kilo_process_folder, 'templates.npy')).swapaxes(1, 2)
+
+                with open(join(self.kilo_process_folder, 'time.txt')) as f:
+                    self.processing_time = float(f.readlines()[0])
 
                 self.spike_trains = []
                 clust_id, n_counts = np.unique(self.spike_clusters, return_counts=True)
@@ -703,9 +624,9 @@ class SpikeSorter:
                 if plot_cc:
                     plt.figure()
                     plt.imshow(self.cc_matr)
-                print self.pairs
+                print 'PAIRS: ', self.pairs
 
-                performance = compute_performance(self.counts)
+                self.performance = compute_performance(self.counts)
 
                 if plot_rasters:
                     fig = plt.figure()
@@ -718,6 +639,14 @@ class SpikeSorter:
                     ax1.set_title('KILOSORT')
 
                 print 'Total elapsed time: ', time.time() - t_start
+
+                # save results
+                if not os.path.isdir(join(self.kilo_folder, 'results')):
+                    os.makedirs(join(self.kilo_folder, 'results'))
+                np.save(join(self.kilo_folder, 'results', 'counts'), self.counts)
+                np.save(join(self.kilo_folder, 'results', 'performance'), self.performance)
+                np.save(join(self.kilo_folder, 'results', 'time'), self.processing_time)
+
 
         if self.mountain:
             print 'Applying Mountainsort algorithm'
@@ -777,7 +706,8 @@ class SpikeSorter:
                     else:
                         subprocess.check_output(['mlp-run', 'mountainsort3.mlp', 'sort', '--raw=raw.mda',
                                                  '--geom=geom.csv', '--firings_out=firings.mda', '--_params=params.json'])
-                    print 'Elapsed time: ', time.time() - t_start_proc
+                    self.processing_time = time.time() - t_start_proc
+                    print 'Elapsed time: ', self.processing_time
                 except subprocess.CalledProcessError as e:
                     raise Exception(e.output)
 
@@ -807,9 +737,9 @@ class SpikeSorter:
                 if plot_cc:
                     plt.figure()
                     plt.imshow(self.cc_matr)
-                print self.pairs
+                print 'PAIRS: ', self.pairs
 
-                performance = compute_performance(self.counts)
+                self.performance =  compute_performance(self.counts)
 
                 if plot_rasters:
                     fig = plt.figure()
@@ -825,6 +755,13 @@ class SpikeSorter:
                     ax1.set_title('MOUNTAINSORT')
 
                 print 'Total elapsed time: ', time.time() - t_start
+
+                # save results
+                if not os.path.isdir(join(self.mountain_folder, 'results')):
+                    os.makedirs(join(self.mountain_folder, 'results'))
+                np.save(join(self.mountain_folder, 'results', 'counts'), self.counts)
+                np.save(join(self.mountain_folder, 'results', 'performance'), self.performance)
+                np.save(join(self.mountain_folder, 'results', 'time'), self.processing_time)
 
         if self.circus:
             print 'Applying Spyking-circus algorithm'
@@ -854,7 +791,7 @@ class SpikeSorter:
                 circus_config = f.readlines()
 
             nchan = self.recordings.shape[0]
-            threshold = 6
+            threshold = self.threshold
             filter = False
 
             circus_config = ''.join(circus_config).format(
@@ -874,7 +811,8 @@ class SpikeSorter:
                     os.chdir(self.spykingcircus_folder)
                     t_start_proc = time.time()
                     subprocess.check_output(['spyking-circus', 'recordings.npy', '-c', str(n_cores)])
-                    print 'Elapsed time: ', time.time() - t_start_proc
+                    self.processing_time = time.time() - t_start_proc
+                    print 'Elapsed time: ', self.processing_time
                 except subprocess.CalledProcessError as e:
                     raise Exception(e.output)
 
@@ -908,9 +846,9 @@ class SpikeSorter:
                 if plot_cc:
                     plt.figure()
                     plt.imshow(self.cc_matr)
-                print self.pairs
+                print 'PAIRS: ', self.pairs
 
-                performance = compute_performance(self.counts)
+                self.performance =  compute_performance(self.counts)
 
                 if plot_rasters:
                     fig = plt.figure()
@@ -923,6 +861,14 @@ class SpikeSorter:
                     ax1.set_title('SPYKING-CIRCUS')
 
                 print 'Elapsed time: ', time.time() - t_start
+
+                # save results
+                if not os.path.isdir(join(self.spykingcircus_folder, 'results')):
+                    os.makedirs(join(self.spykingcircus_folder, 'results'))
+                np.save(join(self.spykingcircus_folder, 'results', 'counts'), self.counts)
+                np.save(join(self.spykingcircus_folder, 'results','performance'), self.performance)
+                np.save(join(self.spykingcircus_folder, 'results', 'time'), self.processing_time)
+
 
         if self.yass:
             print 'Applying YASS algorithm'
@@ -952,11 +898,12 @@ class SpikeSorter:
                 yass_config = f.readlines()
 
             nchan = self.recordings.shape[0]
-            threshold = 6
+            threshold = self.threshold
             filter = False
 
             yass_config = ''.join(yass_config).format(
-                './', dat_file, self.electrode_name + '.npy', 'int16', int(self.fs.rescale('Hz')), nchan, filter
+                './', dat_file, self.electrode_name + '.npy', 'int16', int(self.fs.rescale('Hz')), nchan, filter,
+                self.threshold
             )
 
             with open(join(self.yass_folder, 'config.yaml'), 'w') as f:
@@ -970,7 +917,8 @@ class SpikeSorter:
                     os.chdir(self.yass_folder)
                     t_start_proc = time.time()
                     subprocess.check_output(['yass', 'config.yaml'])
-                    print 'Elapsed time: ', time.time() - t_start_proc
+                    self.processing_time = time.time() - t_start_proc
+                    print 'Elapsed time: ', self.processing_time
                 except subprocess.CalledProcessError as e:
                     raise Exception(e.output)
 
@@ -1006,9 +954,9 @@ class SpikeSorter:
                 if plot_cc:
                     plt.figure()
                     plt.imshow(self.cc_matr)
-                print self.pairs
+                print 'PAIRS: ', self.pairs
 
-                performance = compute_performance(self.counts)
+                self.performance = compute_performance(self.counts)
 
                 if plot_rasters:
                     fig = plt.figure()
@@ -1022,10 +970,12 @@ class SpikeSorter:
 
                 print 'Elapsed time: ', time.time() - t_start
 
-                # # save results
-                # if not os.path.isdir(join(self.yass_folder, 'performance')):
-                #     os.makedirs(join(self.yass_folder, 'performance'))
-                # np.save('counts', self.counts)
+                # save results
+                if not os.path.isdir(join(self.yass_folder, 'results')):
+                    os.makedirs(join(self.yass_folder, 'results'))
+                np.save(join(self.yass_folder, 'results', 'counts'), self.counts)
+                np.save(join(self.yass_folder, 'results', 'performance'), self.performance)
+                np.save(join(self.yass_folder, 'results', 'time'), self.processing_time)
 
 def compute_performance(counts):
 
@@ -1078,7 +1028,11 @@ def compute_performance(counts):
     print 'PRECISION: ', precision, ' %'
     print 'FALSE DISCOVERY RATE: ', false_discovery_rate, ' %'
 
-    return accuracy
+    performance = {'tot_tp': tot_tp_rate, 'tot_cl': tot_cl_rate, 'tot_fn': tot_fn_rate, 'tot_fp': fp_gt,
+                   'accuracy': accuracy, 'sensitivity': sensitivity, 'precision': precision, 'miss_rate': miss_rate,
+                   'false_disc_rate': false_discovery_rate}
+
+    return performance
 
 
 
@@ -1141,3 +1095,126 @@ if __name__ == '__main__':
     else:
         sps = SpikeSorter(save=True, rec_folder=rec_folder, alg=mod, lag=lag, gfmode=gfmode, duration=dur,
                           tstart=tstart, tstop=tstop, run_ss=spikesort)
+
+        #
+        # if self.cica:
+        #     if self.run_ss:
+        #         print 'Applying convolutive embedded ICA'
+        #         t_start = time.time()
+        #         self.s_cica, self.A_cica, self.W_cica = ica.cICAemb(self.recordings, L=self.lag)
+        #         print 'Elapsed time: ', time.time() - t_start
+        #
+        #         if plot_source:
+        #             plot_mea_recording(self.s_cica, self.mea_pos, self.mea_dim, color='r')
+        #
+        #         # clean sources based on skewness and correlation
+        #         spike_sources, self.source_idx, self.correlated_pairs = clean_sources(self.s_cica, corr_thresh=self.corr_thresh,
+        #                                                                               skew_thresh=self.skew_thresh)
+        #         if plot_source:
+        #             plt.figure()
+        #             plt.plot(np.transpose(spike_sources))
+        #
+        #         self.cleaned_sources_cica = spike_sources
+        #         print 'Number of cleaned sources: ', self.cleaned_sources_cica.shape[0]
+        #
+        #         # detect spikes and align
+        #         self.spike_trains = detect_and_align(spike_sources, self.fs, self.recordings,
+        #                                              t_start=self.gtst[0].t_start,
+        #                                              t_stop=self.gtst[0].t_stop)
+        #
+        #         self.spike_amps = [sp.annotations['ica_amp'] for sp in self.spike_trains]
+        #
+        #         self.sst, self.amps, self.nclusters, keep, score = \
+        #             cluster_spike_amplitudes(self.spike_amps, self.spike_trains, metric='cal', alg=self.clustering)
+        #
+        #         self.sst, self.independent_spike_idx, self.duplicates = reject_duplicate_spiketrains(self.sst)
+        #         self.cica_spike_sources_idx = self.source_idx[self.independent_spike_idx]
+        #         self.cica_spike_sources = self.cleaned_sources_cica[self.independent_spike_idx]
+        #
+        #         self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
+        #         if plot_cc:
+        #             plt.figure()
+        #             plt.imshow(self.cc_matr)
+        #         print self.pairs
+        #
+        #         self.performance =  compute_performance(self.counts)
+        #
+        #         if plot_rasters:
+        #             fig = plt.figure()
+        #             ax1 = fig.add_subplot(211)
+        #             ax2 = fig.add_subplot(212)
+        #
+        #             sst_order = self.pairs[:, 1]
+        #
+        #             raster_plots(self.gtst, color_st=self.pairs[:, 0], ax=ax1)
+        #             raster_plots(self.sst, color_st=self.pairs[:, 1], ax=ax2)
+        #
+        #             ax1.set_title('cICA GT', fontsize=20)
+        #             ax2.set_title('cICA ST', fontsize=20)
+        #
+        # if self.gfica:
+        #     if self.run_ss:
+        #         print 'Applying gradient-flow ICA'
+        #         t_start = time.time()
+        #         self.s_gfica, self.A_gfica, self.W_gfica = ica.gFICA(self.recordings, self.mea_dim, mode=self.gfmode)
+        #         # s_gf_int = integrate_sources(s_gf)
+        #         print 'Elapsed time: ', time.time() - t_start
+        #
+        #         # gf_mea = np.reshape(np.reshape(mea_pos, (mea_dim[0], mea_dim[1], mea_pos.shape[1]))[:-1, :-1],
+        #         #                     ((mea_dim[0]-1)*(mea_dim[1]-1), mea_pos.shape[1]))
+        #         # gf_dim = (mea_dim[0]-1, mea_dim[1]-1)
+        #         #
+        #         # print 'Elapsed time: ', time.time() - t_start
+        #
+        #         if plot_source:
+        #             plot_mea_recording(self.s_gfica[:n_elec], self.mea_pos, self.mea_dim, color='r')
+        #             plot_mea_recording(self.s_gfica[:n_elec], self.mea_pos, self.mea_dim, color='g')
+        #             plot_mea_recording(self.s_gfica[:n_elec], self.mea_pos, self.mea_dim, color='bhn')
+        #
+        #         # clean sources based on skewness and correlation
+        #         spike_sources, self.source_idx, self.correlated_pairs = clean_sources(self.s_gfica,
+        #                                                                               corr_thresh=self.corr_thresh,
+        #                                                                               skew_thresh=self.skew_thresh)
+        #
+        #         if plot_source:
+        #             plt.figure()
+        #             plt.plot(np.transpose(spike_sources))
+        #
+        #         self.cleaned_sources_gfica = spike_sources
+        #         print 'Number of cleaned sources: ', self.cleaned_sources_gfica.shape[0]
+        #
+        #
+        #         # detect spikes and align
+        #         self.spike_trains = detect_and_align(spike_sources, self.fs, self.recordings,
+        #                                              t_start=self.gtst[0].t_start,
+        #                                              t_stop=self.gtst[0].t_stop)
+        #
+        #         self.spike_amps = [sp.annotations['ica_amp'] for sp in self.spike_trains]
+        #
+        #         self.sst, self.amps, self.nclusters, keep, score = \
+        #             cluster_spike_amplitudes(self.spike_amps, self.spike_trains, metric='cal', alg=self.clustering)
+        #
+        #         self.sst, self.independent_spike_idx, self.duplicates = reject_duplicate_spiketrains(self.sst)
+        #         self.gfica_spike_sources_idx = self.source_idx[self.independent_spike_idx]
+        #         self.gfica_spike_sources = self.cleaned_sources_gfica[self.independent_spike_idx]
+        #
+        #         self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
+        #         if plot_cc:
+        #             plt.figure()
+        #             plt.imshow(self.cc_matr)
+        #         print self.pairs
+        #
+        #         self.performance =  compute_performance(self.counts)
+        #
+        #         if plot_rasters:
+        #             fig = plt.figure()
+        #             ax1 = fig.add_subplot(211)
+        #             ax2 = fig.add_subplot(212)
+        #
+        #             sst_order = self.pairs[:, 1]
+        #
+        #             raster_plots(self.gtst, color_st=self.pairs[:, 0], ax=ax1)
+        #             raster_plots(self.sst, color_st=self.pairs[:, 1], ax=ax2)
+        #
+        #             ax1.set_title('gfICA GT', fontsize=20)
+        #             ax2.set_title('gfICA ST', fontsize=20)

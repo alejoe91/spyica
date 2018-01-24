@@ -60,13 +60,13 @@ def smoothICA(X, n_comp='all', L=1, lamb=0, mu=0, n_iter=1000, EM=False):
 
     n_features = X.shape[0]
     n_obs = X.shape[1]
-    batch_size = int(0.3*n_obs)
+    batch_size = int(0.1*n_obs)
     # whiten data
     pca = PCA(n_components=n_comp, whiten=True)
     pca.fit(X)
     data = pca.components_
 
-    learning_rate = 1e4
+    learning_rate = 1e2
     display_step = 20
 
     seed=np.random.seed(2308)
@@ -74,46 +74,42 @@ def smoothICA(X, n_comp='all', L=1, lamb=0, mu=0, n_iter=1000, EM=False):
     sess = tf.Session()
 
     nonlin_mat = []
-    nonlin_inv_mat = []
 
     if L == 1:
         # Z = tf.constant(data, dtype=np.float32)
         Z = tf.placeholder("float", shape=[n_comp, None])
         W = weight_variable((n_comp, n_features), name='demixing', seed=seed)
-        W = tf.divide(W, tf.norm(W))
+        # W = tf.divide(W, tf.norm(W))
         I = tf.constant(np.eye(n_comp, n_features), dtype=np.float32)
         
         y = tf.matmul(W, Z)
-        # TODO: try fastICA non-gaussianity
-        v = tf.random_normal((1, 1000000))
-
-        def G(tensor):
-            # return tf.log(tf.cosh(tensor))
-            #return tf.negative(tf.exp(tf.divide(tf.negative(tensor), 2)))
-            return tf.pow(tensor, 3)
-
-        # def G_kurt(tensor):
-        #     return tf.pow(tensor, 4)
-
-        err = tf.divide(1., tf.square(tf.subtract(tf.reduce_mean(G(y)), tf.reduce_mean(G(v)))))
-        # err = tf.divide(1., tf.reduce_mean(G_kurt(y)))
-        train_step = tf.train.AdamOptimizer(learning_rate).minimize(err)
-
-        # #term_1 = tf.divide(1-tf.exp(-y), 1+tf.exp(-y))
-        # term_1 = tf.pow(y, 3)
-        # #term_2 = y
-        # term_2 = tf.atan(y)
+        # # TODO: try fastICA non-gaussianity
+        # v = tf.random_normal((1, 1000000))
         #
-        # nonlin = tf.matmul(term_1, term_2, transpose_b=True)
-        # nonlin = tf.divide(nonlin, n_obs)
+        # def G(tensor):
+        #     # return tf.log(tf.cosh(tensor))
+        #     #return tf.negative(tf.exp(tf.divide(tf.negative(tensor), 2)))
+        #     return tf.pow(tensor, 3)
         #
-        # nonlin_inv = tf.matmul(term_2, term_1, transpose_b=True)
-        # nonlin_inv = tf.divide(nonlin, n_obs)
+        # # def G_kurt(tensor):
+        # #     return tf.pow(tensor, 4)
         #
-        # square = tf.square(tf.subtract(nonlin, I))
-        # err = tf.reduce_sum(tf.square(tf.subtract(nonlin, I)))
-        # err = tf.reduce_sum(tf.square(tf.subtract(nonlin, tf.diag_part(nonlin))))
+        # err = tf.divide(1., tf.square(tf.subtract(tf.reduce_mean(G(y)), tf.reduce_mean(G(v)))))
+        # # err = tf.divide(1., tf.reduce_mean(G_kurt(y)))
         # train_step = tf.train.AdamOptimizer(learning_rate).minimize(err)
+
+        #term_1 = tf.divide(1-tf.exp(-y), 1+tf.exp(-y))
+        term_1 = tf.pow(y, 3)
+        #term_2 = y
+        term_2 = tf.atan(y)
+
+        nonlin = tf.matmul(term_1, term_2, transpose_b=True)
+        nonlin = tf.divide(nonlin, n_obs)
+
+        square = tf.square(tf.subtract(nonlin, I))
+        err = tf.reduce_sum(square)
+        # err = tf.reduce_sum(tf.square(tf.subtract(nonlin, tf.diag_part(nonlin))))
+        train_step = tf.train.AdamOptimizer(learning_rate).minimize(err)
 
         sess.run(tf.global_variables_initializer())
         sess.as_default()
@@ -125,7 +121,6 @@ def smoothICA(X, n_comp='all', L=1, lamb=0, mu=0, n_iter=1000, EM=False):
         for epoch in range(n_iter):
             idxs = np.random.permutation(n_obs)[:batch_size]
             train_batch = data[:, idxs]
-            # print sess.run(nonlin)[:5, :5]
             sess.run(train_step, feed_dict={Z: train_batch})
             # Display logs per epoch step
             if (epoch + 1) % display_step == 0:
@@ -133,11 +128,10 @@ def smoothICA(X, n_comp='all', L=1, lamb=0, mu=0, n_iter=1000, EM=False):
                 print "Step:", '%04d' % (epoch + 1), "Cost=", "{:.9f}".format(train_err)
                 print 'Elapsed time: ', time.time() - t_start
 
-                print sess.run(tf.reduce_mean(v))
-                #print 'nonlin diag: ', sess.run(tf.diag_part(nonlin))
+                # print sess.run(tf.reduce_mean(v))
+                # print 'nonlin diag: ', sess.run(tf.diag_part(nonlin))
 
-                # nonlin_mat.append(sess.run(nonlin, feed_dict={Z: train_batch}))
-                # nonlin_inv_mat.append(sess.run(nonlin_inv, feed_dict={Z: train_batch}))
+                nonlin_mat.append(sess.run(nonlin, feed_dict={Z: train_batch}))
 
         # todo: show Gert that it doesn't work because it optimizes the chosen function (if y**2)
         # sources are note independent
@@ -150,7 +144,7 @@ def smoothICA(X, n_comp='all', L=1, lamb=0, mu=0, n_iter=1000, EM=False):
         y_opt = []
         A_opt = []
 
-    return y_opt, A_opt, W_opt #, nonlin_mat, nonlin_inv_mat
+    return y_opt, A_opt, W_opt, nonlin_mat
 
 def return_training_data(num, n_obs):
     # random_idxs = np.random.choice(self.num_train_spikes, num)

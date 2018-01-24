@@ -28,9 +28,11 @@ root_folder = os.getcwd()
 class GenST:
     def __init__(self, save=False, spike_folder=None, fs=None, noise_mode=None, n_cells=None, p_exc=None,
                  bound_x=None, min_amp=None, noise_level=None, duration=None, f_exc=None, f_inh=None,
-                 filter=True, over=None, sync=None, modulation=True, min_dist=None, plot_figures=True):
+                 filter=True, over=None, sync=None, modulation=True, min_dist=None, plot_figures=True,
+                 seed=2308):
 
-        np.random.seed(2308)
+        self.seed = seed
+        np.random.seed(seed)
 
         self.spike_folder = spike_folder
         self.fs = float(fs) * pq.kHz
@@ -302,7 +304,8 @@ class GenST:
             # ipdb.set_trace()
             general = {'spike_folder': self.spike_folder, 'rotation': self.rotation_type,
                        'pitch': self.mea_pitch, 'electrode name': str(self.electrode_name),
-                       'MEA dimension': self.mea_dim, 'fs': self.fs}
+                       'MEA dimension': self.mea_dim, 'fs': self.fs, 'duration': str(self.duration),
+                       'seed': self.seed}
 
             templates = {'pad_len': str(self.pad_len)}
 
@@ -454,6 +457,7 @@ if __name__ == '__main__':
     if '-noiselev' in sys.argv:
         pos = sys.argv.index('-noiselev')
         noiselev = sys.argv[pos+1]
+        print noiselev
     else:
         noiselev = 2.6
     if '-nofilter' in sys.argv:
@@ -470,6 +474,11 @@ if __name__ == '__main__':
         plot_figures=True
     if '-noisemod' in sys.argv:
         modulation='noise'
+    if '-seed' in sys.argv:
+        pos = sys.argv.index('-seed')
+        seed = sys.argv[pos + 1]
+    else:
+        seed=2308
 
     if len(sys.argv) == 1:
         print 'Arguments: \n   -f filename\n   -dur duration\n   -freq sampling frequency (in kHz)\n   ' \
@@ -485,7 +494,7 @@ if __name__ == '__main__':
         gs = GenST(save=True, spike_folder=spike_folder, fs=freq, n_cells=ncells, p_exc=pexc, duration=dur,
                    bound_x=bx, min_amp=minamp, noise_mode=noise, noise_level=noiselev, f_exc=fexc, f_inh=finh,
                    filter=filter, over=over, sync=sync, modulation=modulation, min_dist=mindist, 
-                   plot_figures=plot_figures)
+                   plot_figures=plot_figures, seed=seed)
 
 
 
