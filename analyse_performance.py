@@ -22,6 +22,7 @@ all_recordings = [join(root, 'recordings', datatype, f) for f in os.listdir(join
 dur_vec, n_cells_vec, noise_vec, ss_vec, acc_vec, \
 sens_vec, prec_vec, false_vec, miss_vec, time_vec = [], [], [], [], [], [], [], [], [], []
 
+print "Creating dataframe from results: ", len(all_recordings),  " recordings"
 for rec in all_recordings:
     with open(join(rec, 'rec_info.yaml'), 'r') as f:
         info = yaml.load(f)
@@ -33,10 +34,8 @@ for rec in all_recordings:
     sorters = [sort for sort in os.listdir(rec) if os.path.isdir(join(rec, sort))]
     for sort in sorters:
         if sort in spikesorters:
-            print sort
-
             perf = np.load(join(rec, sort, 'results', 'performance.npy')).item()
-            # time = np.load(join(rec, sort, 'results', 'time.npy'))
+            time = np.load(join(rec, sort, 'results', 'time.npy'))
 
             dur_vec.append(duration)
             n_cells_vec.append(n_cells)
@@ -47,16 +46,46 @@ for rec in all_recordings:
             prec_vec.append(perf['precision'])
             false_vec.append(perf['false_disc_rate'])
             miss_vec.append(perf['miss_rate'])
-            # time_vec.append(float(time))
+            time_vec.append(float(time))
 
 # create dataframe
 data = {'duration': dur_vec, 'ncells': n_cells_vec, 'noise': noise_vec, 'spikesorter': ss_vec,
         'accuracy': acc_vec, 'sensitivity': sens_vec, 'precision': prec_vec, 'miss_rate': miss_vec,
-        'false_rate': false_vec} #, 'time': time_vec}
+        'false_rate': false_vec, 'time': time_vec}
 
 dset = pd.DataFrame(data)
 
-dset_10s = dset[dset['duration']==10]
+print "Complexity analysis"
+duration = 10
+dset_filt = dset[dset['duration']==duration]
+noise=15
+dset_filt = dset_filt[dset_filt['noise']==noise]
+fig1 = plt.figure()
+ax11 = fig1.add_subplot(121)
+sns.pointplot(x='ncells', y='accuracy', hue='spikesorter', data=dset_filt, ax=ax11)
+ax11.set_title('Accuracy')
+ax12 = fig1.add_subplot(122)
+sns.pointplot(x='ncells', y='precision', hue='spikesorter', data=dset_filt, ax=ax12)
+ax12.set_title('Precision')
+
+# print "Noise analysis"
+# duration = 10
+# dset_filt = dset[dset['duration']==duration]
+# cells=20
+# dset_filt = dset_filt[dset_filt['ncells']==cells]
+# sns.pointplot(x='ncells', y='accuracy', hue='spikesorter', data=dset_filt)
+#
+# print "Time analysis"
+# duration = 10
+# dset_filt = dset[dset['duration']==duration]
+# cells=20
+# dset_filt = dset_filt[dset_filt['ncells']==cells]
+# sns.pointplot(x='ncells', y='accuracy', hue='spikesorter', data=dset_filt)
+
+plt.ion()
+plt.show()
+
+
 
 
 

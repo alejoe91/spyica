@@ -47,7 +47,7 @@ spikes:
 
 deconvolution:
   rank: 3
-  threshold: {}
+  threshold: 4
   lam: 20
 
 

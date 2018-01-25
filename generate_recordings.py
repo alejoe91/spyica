@@ -29,7 +29,7 @@ class GenST:
     def __init__(self, save=False, spike_folder=None, fs=None, noise_mode=None, n_cells=None, p_exc=None,
                  bound_x=None, min_amp=None, noise_level=None, duration=None, f_exc=None, f_inh=None,
                  filter=True, over=None, sync=None, modulation=True, min_dist=None, plot_figures=True,
-                 seed=2308):
+                 seed=2904):
 
         self.seed = seed
         np.random.seed(seed)

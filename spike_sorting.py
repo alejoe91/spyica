@@ -54,7 +54,7 @@ class SpikeSorter:
         sys.path.append(self.root)
 
         self.clustering = 'mog'
-        self.threshold = 6
+        self.threshold = 4
 
         self.minimum_spikes_per_cluster = 3
 
@@ -793,7 +793,7 @@ class SpikeSorter:
             filter = False
 
             circus_config = ''.join(circus_config).format(
-                'numpy', float(self.fs.rescale('Hz')), prb_path, threshold, filter
+                'numpy', float(self.fs.rescale('Hz')), prb_path, filter
             )
 
             with open(join(self.spykingcircus_folder, filename + '.params'), 'w') as f:
@@ -900,8 +900,7 @@ class SpikeSorter:
             filter = False
 
             yass_config = ''.join(yass_config).format(
-                './', dat_file, self.electrode_name + '.npy', 'int16', int(self.fs.rescale('Hz')), nchan, filter,
-                self.threshold
+                './', dat_file, self.electrode_name + '.npy', 'int16', int(self.fs.rescale('Hz')), nchan, filter
             )
 
             with open(join(self.yass_folder, 'config.yaml'), 'w') as f:

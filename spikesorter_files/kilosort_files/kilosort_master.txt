@@ -15,8 +15,8 @@ run(fullfile('kilosort_config.m'))
 rez                = fitTemplates(rez, DATA, uproj);  % fit templates iteratively
 rez                = fullMPMU(rez, DATA);% extract final spike times (overlapping extraction)
 
-%rez = merge_posthoc2(rez); % merge obtained spikes (mimic Phy user action)
-%
+rez = merge_posthoc2(rez); % merge obtained spikes (mimic Phy user action)
+
 %Fix merge problems (https://github.com/kwikteam/phy-contrib/issues/132)
 %
 %if(~isequal(rez.st3(:,2),rez.st3(:,5)))
