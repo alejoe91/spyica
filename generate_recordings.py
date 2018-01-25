@@ -288,13 +288,13 @@ class GenST:
                             + '_' + str(self.duration).replace(' ','') + '_' + self.noise_mode + '_' \
                             + str(self.noise_level) + '_' + str(self.f_exc).replace(' ','') + '_' \
                             + str(self.f_inh).replace(' ','') + '_modulated' \
-                            + '_' + time.strftime("%d-%m-%Y:%H:%M")
+                            + '_' + time.strftime("%d-%m-%Y:%H:%M") + '_' + str(self.seed)
         else:
             self.rec_name = 'recording_' + self.rotation_type + '_' + self.electrode_name + '_' + str(self.n_cells) \
                             + '_' + str(self.duration).replace(' ', '') + '_' + self.noise_mode + '_' \
                             + str(self.noise_level) + '_' + str(self.f_exc).replace(' ', '') + '_' \
                             + str(self.f_inh).replace(' ', '') + '_nonmodulated' \
-                            + '_' + time.strftime("%d-%m-%Y:%H:%M")
+                            + '_' + time.strftime("%d-%m-%Y:%H:%M") + '_' + str(self.seed)
         rec_dir = join(root_folder, 'recordings', 'convolution')
         self.rec_path = join(rec_dir, self.rec_name)
         os.makedirs(self.rec_path)
