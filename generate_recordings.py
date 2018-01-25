@@ -478,7 +478,7 @@ if __name__ == '__main__':
         pos = sys.argv.index('-seed')
         seed = sys.argv[pos + 1]
     else:
-        seed=2308
+        seed=2904
 
     if len(sys.argv) == 1:
         print 'Arguments: \n   -f filename\n   -dur duration\n   -freq sampling frequency (in kHz)\n   ' \

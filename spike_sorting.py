@@ -557,12 +557,13 @@ class SpikeSorter:
                 kilosort_channelmap = f.readlines()
             nchan = self.recordings.shape[0]
             dat_file = 'raw.dat'
+            kilo_thresh = 6
 
             kilosort_master = ''.join(kilosort_master).format(
                 self.kilo_folder
             )
             kilosort_config = ''.join(kilosort_config).format(
-                nchan, nchan, int(self.fs.rescale('Hz')), dat_file, threshold,
+                nchan, nchan, int(self.fs.rescale('Hz')), dat_file, kilo_thresh,
             )
             kilosort_channelmap = ''.join(kilosort_channelmap
                                           ).format(nchan, list(self.mea_pos[:, 1]), list(self.mea_pos[:, 2]),

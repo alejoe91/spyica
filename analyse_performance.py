@@ -8,7 +8,7 @@ import seaborn as sns
 import yaml
 
 datatype = 'convolution'
-spikesorters = ['ica', 'kilosort', 'klusta', 'spykingcircus', 'mountainsort', 'yass']
+spikesorters = ['ica', 'kilosort', 'klusta', 'spykingcircus', 'mountain', 'yass']
 
 # duration = 10.0
 # noise = 'all'
@@ -58,7 +58,7 @@ dset = pd.DataFrame(data)
 print "Complexity analysis"
 duration = 10
 dset_filt = dset[dset['duration']==duration]
-noise=15
+noise=5
 dset_filt = dset_filt[dset_filt['noise']==noise]
 fig1 = plt.figure()
 ax11 = fig1.add_subplot(121)
