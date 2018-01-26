@@ -27,13 +27,16 @@ rez = merge_posthoc2(rez); % merge obtained spikes (mimic Phy user action)
 %    empties=setdiff(1:max(un),un);
 %    if isempty(empties), error('why empty?'); end
 %end
-%
+
 %set cluster that did have id=0 to an empty slot
 %rez.st3(rez.st3(:,5)==-1,5)=empties(1);
 
 % save python results file for Phy
 mkdir('process')
 rezToPhy(rez, fullfile(pwd, 'process'));
+
+movefile('raw.dat', [pwd 'process'])
+movefile('temp_wh.dat', [pwd 'process'])
 
 elapsed_time = toc;
 fid = fopen(fullfile(pwd, 'process', 'time.txt'), 'w');

@@ -16,8 +16,11 @@ spikesorters = ['ica', 'kilosort', 'klusta', 'spykingcircus', 'mountain', 'yass'
 # probe = 'Neuronexus'
 
 root = os.getcwd()
+seed=2904
+probe='SqMEA'
 
-all_recordings = [join(root, 'recordings', datatype, f) for f in os.listdir(join(root, 'recordings', datatype))]
+all_recordings = [join(root, 'recordings', datatype, f) for f in os.listdir(join(root, 'recordings', datatype))
+                  if str(seed) in f and probe in f]
 
 dur_vec, n_cells_vec, noise_vec, ss_vec, acc_vec, \
 sens_vec, prec_vec, false_vec, miss_vec, time_vec = [], [], [], [], [], [], [], [], [], []
@@ -56,17 +59,29 @@ data = {'duration': dur_vec, 'ncells': n_cells_vec, 'noise': noise_vec, 'spikeso
 dset = pd.DataFrame(data)
 
 print "Complexity analysis"
-duration = 10
+duration = 5
 dset_filt = dset[dset['duration']==duration]
-noise=5
+noise = 5
 dset_filt = dset_filt[dset_filt['noise']==noise]
 fig1 = plt.figure()
-ax11 = fig1.add_subplot(121)
+ax11 = fig1.add_subplot(231)
 sns.pointplot(x='ncells', y='accuracy', hue='spikesorter', data=dset_filt, ax=ax11)
 ax11.set_title('Accuracy')
-ax12 = fig1.add_subplot(122)
+ax12 = fig1.add_subplot(232)
 sns.pointplot(x='ncells', y='precision', hue='spikesorter', data=dset_filt, ax=ax12)
 ax12.set_title('Precision')
+ax13 = fig1.add_subplot(233)
+sns.pointplot(x='ncells', y='sensitivity', hue='spikesorter', data=dset_filt, ax=ax13)
+ax13.set_title('Sensitivity')
+ax21 = fig1.add_subplot(234)
+sns.pointplot(x='ncells', y='miss_rate', hue='spikesorter', data=dset_filt, ax=ax21)
+ax21.set_title('Miss Rate')
+ax22 = fig1.add_subplot(235)
+sns.pointplot(x='ncells', y='false_rate', hue='spikesorter', data=dset_filt, ax=ax22)
+ax22.set_title('False Discovery Rate')
+ax23 = fig1.add_subplot(236)
+sns.pointplot(x='ncells', y='time', hue='spikesorter', data=dset_filt, ax=ax23)
+ax23.set_title('Processing Time')
 
 # print "Noise analysis"
 # duration = 10

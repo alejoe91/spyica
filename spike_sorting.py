@@ -56,7 +56,7 @@ class SpikeSorter:
         self.clustering = 'mog'
         self.threshold = 4
 
-        self.minimum_spikes_per_cluster = 3
+        self.minimum_spikes_per_cluster = 15
 
         if self.rec_name.startswith('recording'):
             self.gtst = np.load(join(self.rec_folder, 'spiketrains.npy'))
@@ -126,7 +126,7 @@ class SpikeSorter:
         self.max_idx = self.min_idx = None
         if self.tstart or self.tstop or self.duration:
             if self.tstart is not None:
-                self.tstart = int(self.tstart) * pq.s
+                self.tstart = float(self.tstart) * pq.s
                 self.min_idx = np.where(self.times > self.tstart)[0][0]
             else:
                 self.min_idx = 0
@@ -218,7 +218,7 @@ class SpikeSorter:
                                                                  n_chunks=n_chunks, chunk_size=chunk_size)
 
                 if self.plot_figures:
-                    plot_mea_recording(self.s_ica, self.mea_pos, self.mea_dim, color='r')
+                    plot_mea_recording(self.s_ica, self.mea_pos, self.mea_pitch, color='r')
 
                 # clean sources based on skewness and correlation
                 spike_sources, self.source_idx, self.correlated_pairs = clean_sources(self.s_ica,
@@ -229,6 +229,9 @@ class SpikeSorter:
                     plt.plot(np.transpose(spike_sources))
 
                 self.cleaned_sources_ica = spike_sources
+                self.cleaned_A_ica = self.A_ica[self.source_idx]
+                self.cleaned_W_ica = self.W_ica[self.source_idx]
+
                 print 'Number of cleaned sources: ', self.cleaned_sources_ica.shape[0]
 
                 print 'Clustering Sources with: ', self.clustering
@@ -258,10 +261,6 @@ class SpikeSorter:
                     #         self.sst.append(self.possible_sst[sst_idx])
 
                     self.spike_trains, self.independent_spike_idx, self.dup = reject_duplicate_spiketrains(self.spike_trains)
-
-                    self.ica_spike_sources_idx = self.source_idx[self.independent_spike_idx]
-                    self.ica_spike_sources = self.cleaned_sources_ica[self.independent_spike_idx]
-                    self.sst = self.spike_trains
 
                 elif self.clustering=='klusta':
                     if not os.path.isdir(join(self.rec_folder, 'ica')):
@@ -333,6 +332,13 @@ class SpikeSorter:
                     self.spike_amps = [sp.annotations['ica_amp'] for sp in self.spike_trains]
                     self.sst = self.spike_trains
 
+                self.ica_spike_sources_idx = self.source_idx[self.independent_spike_idx]
+                self.ic_spike_sources = self.cleaned_sources_ica[self.independent_spike_idx]
+                self.A_spike_sources = self.cleaned_A_ica[self.independent_spike_idx]
+                self.W_spike_sources = self.cleaned_W_ica[self.independent_spike_idx]
+
+                self.sst = self.spike_trains
+
                 self.processing_time = time.time() - t_start_proc
                 print 'Elapsed time: ', self.processing_time
 
@@ -369,7 +375,7 @@ class SpikeSorter:
                 self.s_sica, self.A_sica, self.W_sica, self.nonlin = sICA.smoothICA(self.recordings) #, self.nonlin, self.nonlin_inv
 
                 if self.plot_figures:
-                    plot_mea_recording(self.s_sica, self.mea_pos, self.mea_dim, color='r')
+                    plot_mea_recording(self.s_sica, self.mea_pos, self.mea_pitch, color='r')
 
                 # clean sources based on skewness and correlation
                 spike_sources, self.source_idx, self.correlated_pairs = clean_sources(self.s_sica,

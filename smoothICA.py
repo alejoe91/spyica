@@ -4,6 +4,7 @@ import matplotlib.pylab as plt
 import time
 from sklearn.decomposition import PCA
 import matplotlib.pylab as plt
+from scipy.stats import skewnorm
 
 def weight_variable(shape, name, seed):
     initial = tf.truncated_normal(shape, stddev=0.1, seed=seed)
@@ -38,7 +39,7 @@ def svd_whiten(X):
     return X_white
 
 
-def smoothICA(X, n_comp='all', L=1, lamb=0, mu=0, n_iter=1000, EM=False):
+def smoothICA(X, n_comp='all', L=1, lamb=0, mu=0, n_iter=500, EM=False):
     '''
 
     Parameters
@@ -60,7 +61,7 @@ def smoothICA(X, n_comp='all', L=1, lamb=0, mu=0, n_iter=1000, EM=False):
 
     n_features = X.shape[0]
     n_obs = X.shape[1]
-    batch_size = int(0.1*n_obs)
+    batch_size = int(1.*n_obs)
     # whiten data
     pca = PCA(n_components=n_comp, whiten=True)
     pca.fit(X)
@@ -83,6 +84,14 @@ def smoothICA(X, n_comp='all', L=1, lamb=0, mu=0, n_iter=1000, EM=False):
         I = tf.constant(np.eye(n_comp, n_features), dtype=np.float32)
         
         y = tf.matmul(W, Z)
+        a = tf.constant(4.)
+
+        # use skewed distr TOO SLOW
+        # todo approximate pdf with sum of gaussians and then compute cdf
+
+        term_2 = tf.cast(tf.py_func(skewnorm.cdf, [y, a], tf.double), dtype=tf.float32)
+
+
         # # TODO: try fastICA non-gaussianity
         # v = tf.random_normal((1, 1000000))
         #
@@ -99,9 +108,10 @@ def smoothICA(X, n_comp='all', L=1, lamb=0, mu=0, n_iter=1000, EM=False):
         # train_step = tf.train.AdamOptimizer(learning_rate).minimize(err)
 
         #term_1 = tf.divide(1-tf.exp(-y), 1+tf.exp(-y))
-        term_1 = tf.pow(y, 3)
-        #term_2 = y
-        term_2 = tf.atan(y)
+        #term_1 = tf.pow(y, 3)
+        # term_1 = tf.exp(y)-1
+        term_1 = y
+        # term_2 = tf.subtract(y, tf.tanh(y))
 
         nonlin = tf.matmul(term_1, term_2, transpose_b=True)
         nonlin = tf.divide(nonlin, n_obs)
@@ -114,6 +124,7 @@ def smoothICA(X, n_comp='all', L=1, lamb=0, mu=0, n_iter=1000, EM=False):
         sess.run(tf.global_variables_initializer())
         sess.as_default()
 
+        raise Exception()
         ############
         # TRAINING #
         ############

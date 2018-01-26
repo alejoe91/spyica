@@ -57,7 +57,7 @@ def instICA(X, n_comp='all', n_chunks=1, chunk_size=None):
     ica = FastICA(n_components=n_comp)
     ica.fit(np.transpose(X_reduced))
     sources = np.transpose(ica.transform(np.transpose(X)))
-    A = ica.mixing_
+    A = np.transpose(ica.mixing_)
     W = ica.components_
 
     return sources, A, W

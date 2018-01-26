@@ -1724,6 +1724,15 @@ def export_prb_file(n_elec, electrode_name, pathname,
     return full_filename
 
 
+def compute_cdf_pdf(data):
+
+    sorted_data=np.sort(data)
+    cdf = np.arange(1,len(sorted_data)+1)/float(len(sorted_data))
+    pdf = np.diff(cdf)
+
+    return cdf, pdf
+
+
 
 
 
