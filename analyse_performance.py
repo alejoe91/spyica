@@ -8,7 +8,8 @@ import seaborn as sns
 import yaml
 
 datatype = 'convolution'
-spikesorters = ['ica', 'kilosort', 'klusta', 'spykingcircus', 'mountain', 'yass']
+# spikesorters = ['ica', 'kilosort', 'klusta', 'spykingcircus', 'mountain', 'yass']
+spikesorters = ['ica', 'mountain', 'spykingcircus'] #, 'yass']
 
 # duration = 10.0
 # noise = 'all'
@@ -83,20 +84,30 @@ ax23 = fig1.add_subplot(236)
 sns.pointplot(x='ncells', y='time', hue='spikesorter', data=dset_filt, ax=ax23)
 ax23.set_title('Processing Time')
 
-# print "Noise analysis"
-# duration = 10
-# dset_filt = dset[dset['duration']==duration]
-# cells=20
-# dset_filt = dset_filt[dset_filt['ncells']==cells]
-# sns.pointplot(x='ncells', y='accuracy', hue='spikesorter', data=dset_filt)
-#
-# print "Time analysis"
-# duration = 10
-# dset_filt = dset[dset['duration']==duration]
-# cells=20
-# dset_filt = dset_filt[dset_filt['ncells']==cells]
-# sns.pointplot(x='ncells', y='accuracy', hue='spikesorter', data=dset_filt)
-
+print "Noise analysis"
+duration = 5
+dset_filt = dset[dset['duration']==duration]
+ncells=20
+dset_filt = dset_filt[dset_filt['ncells']==ncells]
+fig1 = plt.figure()
+ax11 = fig1.add_subplot(231)
+sns.pointplot(x='ncells', y='accuracy', hue='spikesorter', data=dset_filt, ax=ax11)
+ax11.set_title('Accuracy')
+ax12 = fig1.add_subplot(232)
+sns.pointplot(x='ncells', y='precision', hue='spikesorter', data=dset_filt, ax=ax12)
+ax12.set_title('Precision')
+ax13 = fig1.add_subplot(233)
+sns.pointplot(x='ncells', y='sensitivity', hue='spikesorter', data=dset_filt, ax=ax13)
+ax13.set_title('Sensitivity')
+ax21 = fig1.add_subplot(234)
+sns.pointplot(x='ncells', y='miss_rate', hue='spikesorter', data=dset_filt, ax=ax21)
+ax21.set_title('Miss Rate')
+ax22 = fig1.add_subplot(235)
+sns.pointplot(x='ncells', y='false_rate', hue='spikesorter', data=dset_filt, ax=ax22)
+ax22.set_title('False Discovery Rate')
+ax23 = fig1.add_subplot(236)
+sns.pointplot(x='ncells', y='time', hue='spikesorter', data=dset_filt, ax=ax23)
+ax23.set_title('Processing Time')
 plt.ion()
 plt.show()
 

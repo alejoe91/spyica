@@ -35,8 +35,8 @@ rez = merge_posthoc2(rez); % merge obtained spikes (mimic Phy user action)
 mkdir('process')
 rezToPhy(rez, fullfile(pwd, 'process'));
 
-movefile('raw.dat', [pwd 'process'])
-movefile('temp_wh.dat', [pwd 'process'])
+movefile('raw.dat', fullfile(pwd, 'process'))
+movefile('temp_wh.dat', fullfile(pwd, 'process'))
 
 elapsed_time = toc;
 fid = fopen(fullfile(pwd, 'process', 'time.txt'), 'w');
