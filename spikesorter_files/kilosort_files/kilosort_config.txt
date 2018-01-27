@@ -17,16 +17,16 @@ ops.chanMap             = fullfile('chanMap.mat'); % make this file using create
 %ops.chanMap = 1:ops.Nchan; % treated as linear probe if unavailable chanMap file
 
 
-ops.Nfilt               = 64;  % number of clusters to use (2-4 times more than Nchan, should be a multiple of 32)
-ops.nNeighPC            = 30; % visualization only (Phy): number of channnels to mask the PCs, leave empty to skip (12)
-ops.nNeigh              = 30; % visualization only (Phy): number of neighboring templates to retain projections of (16)
+ops.Nfilt               = {};  % number of clusters to use (2-4 times more than Nchan, should be a multiple of 32)
+ops.nNeighPC            = 16; % visualization only (Phy): number of channnels to mask the PCs, leave empty to skip (12)
+ops.nNeigh              = 16; % visualization only (Phy): number of neighboring templates to retain projections of (16)
 		
 % options for channel whitening		
 ops.whitening           = 'full'; % type of whitening (default 'full', for 'noSpikes' set options for spike detection below)		
 ops.nSkipCov            = 1; % compute whitening matrix from every N-th batch (1)		
-ops.whiteningRange      = Inf %32; % how many channels to whiten together (Inf for whole probe whitening, should be fine if Nchan<=32)
+ops.whiteningRange      = 32; % how many channels to whiten together (Inf for whole probe whitening, should be fine if Nchan<=32)
 		
-ops.criterionNoiseChannels = 0.2; % fraction of "noise" templates allowed to span all channel groups (see createChannelMapFile for more info). 		
+%ops.criterionNoiseChannels = 0.2; % fraction of "noise" templates allowed to span all channel groups (see createChannelMapFile for more info).
 
 % other options for controlling the model and optimization		
 ops.Nrank               = 3;    % matrix rank of spike template model (3)		
@@ -36,7 +36,7 @@ ops.fshigh              = 300;   % frequency for high pass filtering
 ops.fslow               = 6000;   % frequency for low pass filtering (optional)
 ops.ntbuff              = 64;    % samples of symmetrical buffer for whitening and spike detection		
 ops.scaleproc           = 200;   % int16 scaling of whitened data		
-ops.NT                  = 128*128 + ops.ntbuff;
+ops.NT                  = {}; %32*1024+ ops.ntbuff;
 % this is the batch size (try decreasing if out of memory)
 % for GPU should be multiple of 32 + ntbuff		
 		

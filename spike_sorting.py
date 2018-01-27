@@ -564,12 +564,16 @@ class SpikeSorter:
             nchan = self.recordings.shape[0]
             dat_file = 'raw.dat'
             kilo_thresh = 6
+            Nfilt = (nchan//32)*32*4
+            if Nfilt == 0:
+                Nfilt = 64
+            nsamples = 128*1024 + 32 #self.recordings.shape[1]
 
             kilosort_master = ''.join(kilosort_master).format(
                 self.kilo_folder
             )
             kilosort_config = ''.join(kilosort_config).format(
-                nchan, nchan, int(self.fs.rescale('Hz')), dat_file, kilo_thresh,
+                nchan, nchan, int(self.fs.rescale('Hz')), dat_file, Nfilt, nsamples, kilo_thresh
             )
             kilosort_channelmap = ''.join(kilosort_channelmap
                                           ).format(nchan, list(self.mea_pos[:, 1]), list(self.mea_pos[:, 2]),
@@ -600,7 +604,9 @@ class SpikeSorter:
                 print 'Parsing output files...'
                 self.spike_times = np.load(join(self.kilo_process_folder, 'spike_times.npy'))
                 self.spike_clusters = np.load(join(self.kilo_process_folder, 'spike_clusters.npy'))
-                self.spike_templates = np.load(join(self.kilo_process_folder, 'templates.npy')).swapaxes(1, 2)
+                self.kl_templates = np.load(join(self.kilo_process_folder, 'templates.npy')).swapaxes(1, 2)
+                self.spike_templates_id = np.load(join(self.kilo_process_folder, 'spike_templates.npy'))
+                self.spike_templates = []
 
                 with open(join(self.kilo_process_folder, 'time.txt')) as f:
                     self.processing_time = float(f.readlines()[0])
@@ -614,10 +620,13 @@ class SpikeSorter:
                 for clust, count in zip(clust_id, n_counts):
                     if count > self.minimum_spikes_per_cluster:
                         idx = np.where(self.spike_clusters == clust)[0]
+                        self.spike_templates.append(self.kl_templates[clust])
                         self.counts += len(idx)
                         spike_times = self.kl_times[idx]
                         spiketrain = neo.SpikeTrain(spike_times, t_start=0 * pq.s, t_stop=self.gtst[0].t_stop)
                         self.spike_trains.append(spiketrain)
+
+                self.spike_templates = np.array(self.spike_templates)
 
                 # print 'Finding independent spiketrains...'
                 # self.sst, self.independent_spike_idx, self.dup = reject_duplicate_spiketrains(self.spike_trains)
@@ -677,6 +686,7 @@ class SpikeSorter:
             filename = join(self.mountain_folder, 'raw.mda')
             mlpy.writemda32(self.recordings, filename)
             print 'saving ', filename
+            radius = 50
 
             # write csv probe file
             with open(join(self.mountain_folder, 'geom.csv'), 'w') as f:
@@ -688,7 +698,7 @@ class SpikeSorter:
 
             # write param filw
             params = {'samplerate': int(self.fs.rescale('Hz').magnitude), 'detect_sign': -1,
-                      "adjacency_radius": float(2*np.min(self.mea_pitch)-2)}
+                      "adjacency_radius": radius}
             with open(join(self.mountain_folder, 'params.json'), 'w') as f:
                 json.dump(params, f)
 
@@ -782,7 +792,8 @@ class SpikeSorter:
                 rec_name = rec_name[-1]
             # create prb and prm files
             prb_path = export_prb_file(self.mea_pos.shape[0], self.electrode_name, self.spykingcircus_folder,
-                                       pos=self.mea_pos, adj_dist=2*np.max(self.mea_pitch), spikesorter='spykingcircus')
+                                       pos=self.mea_pos, adj_dist=2*np.max(self.mea_pitch), spikesorter='spykingcircus',
+                                       radius=30)
 
             filename = 'recordings'
 

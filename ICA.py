@@ -54,7 +54,7 @@ def instICA(X, n_comp='all', n_chunks=1, chunk_size=None):
     else:
         X_reduced = X
 
-    ica = FastICA(n_components=n_comp)
+    ica = FastICA(n_components=n_comp) #, algorithm='deflation')
     ica.fit(np.transpose(X_reduced))
     sources = np.transpose(ica.transform(np.transpose(X)))
     A = np.transpose(ica.mixing_)

@@ -14,7 +14,7 @@ parallel_hdf5  = True                  # Use the parallel HDF5 feature (if avail
 
 [detection]
 radius         = auto       # Radius [in um] (if auto, read from the prb file)
-N_t            = 5          # Width of the templates [in ms]
+N_t            = 2          # Width of the templates [in ms]
 spike_thresh   = 6          # Threshold for spike detection
 peaks          = negative   # Can be negative (default), positive or both
 matched-filter = False      # If True, we perform spike detection with matched filters
@@ -72,7 +72,7 @@ max_chunk      = inf        # Fit only up to max_chunk
 collect_all    = False      # If True, one garbage template per electrode is created, to store unfitted spikes
 
 [merging]
-cc_overlap     = 0.7        # Only templates with CC higher than cc_overlap may be merged
+cc_overlap     = 0.5        # Only templates with CC higher than cc_overlap may be merged CHANGED was(0.7)
 cc_bin         = 2          # Bin size for computing CC [in ms]
 correct_lag    = True       # If spikes are aligned when merging. May be better for phy usage
 auto_mode      = 0          # If >0, merging will be automatic (see doc, 0.1 is a good value) [0-1]
