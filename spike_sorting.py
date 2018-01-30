@@ -48,7 +48,7 @@ class SpikeSorter:
         self.run_ss = run_ss
 
         self.model = alg
-        self.corr_thresh = 0.5
+        self.corr_thresh = 0.2
         self.skew_thresh = 0.2
         self.root = os.getcwd()
         sys.path.append(self.root)
@@ -221,9 +221,10 @@ class SpikeSorter:
                     plot_mea_recording(self.s_ica, self.mea_pos, self.mea_pitch, color='r')
 
                 # clean sources based on skewness and correlation
-                spike_sources, self.source_idx, self.correlated_pairs = clean_sources(self.s_ica,
+                spike_sources, self.source_idx, self.correlated_pairs, self.corr, self.mi = clean_sources(self.s_ica,
                                                                                       corr_thresh=self.corr_thresh,
-                                                                                      skew_thresh=self.skew_thresh)
+                                                                                      skew_thresh=self.skew_thresh,
+                                                                                      remove_correlated=False)
                 if self.plot_figures:
                     plt.figure()
                     plt.plot(np.transpose(spike_sources))
@@ -243,7 +244,7 @@ class SpikeSorter:
                                                             t_stop=self.gtst[0].t_stop, n_std=self.threshold)
                     self.spike_amps = [sp.annotations['ica_amp'] for sp in self.detected_spikes]
 
-                    self.spike_trains, self.amps, self.nclusters, keep, score = \
+                    self.spike_trains, self.amps, self.nclusters, self.keep, self.score = \
                         cluster_spike_amplitudes(self.spike_amps, self.detected_spikes, metric='cal',
                                                  alg=self.clustering)
 
@@ -260,7 +261,8 @@ class SpikeSorter:
                     #     else:
                     #         self.sst.append(self.possible_sst[sst_idx])
 
-                    self.spike_trains, self.independent_spike_idx, self.dup = reject_duplicate_spiketrains(self.spike_trains)
+                    self.spike_trains_rej, self.independent_spike_idx, self.dup = \
+                        reject_duplicate_spiketrains(self.spike_trains)
 
                 elif self.clustering=='klusta':
                     if not os.path.isdir(join(self.rec_folder, 'ica')):
@@ -318,7 +320,8 @@ class SpikeSorter:
                     else:
                         raise Excaption('No kwik file!')
 
-                    self.spike_trains, self.independent_spike_idx = reject_duplicate_spiketrains(self.detected_spikes)
+                    self.spike_trains_rej, self.independent_spike_idx = \
+                        reject_duplicate_spiketrains(self.detected_spikes)
                     self.ica_spike_sources = self.cleaned_sources_ica[self.independent_spike_idx]
                     # self.spike_amps = [sp.annotations['ica_amp'] for sp in self.spike_trains]
                     self.sst = self.spike_trains
@@ -327,17 +330,18 @@ class SpikeSorter:
                     self.detected_spikes = detect_and_align(spike_sources, self.fs, self.recordings,
                                                             t_start=self.gtst[0].t_start,
                                                             t_stop=self.gtst[0].t_stop)
-                    self.spike_trains, self.independent_spike_idx, self.dup = reject_duplicate_spiketrains(self.detected_spikes)
+                    self.spike_trains_rej, self.independent_spike_idx, self.dup = \
+                        reject_duplicate_spiketrains(self.detected_spikes)
                     self.ica_spike_sources = self.cleaned_sources_ica[self.independent_spike_idx]
-                    self.spike_amps = [sp.annotations['ica_amp'] for sp in self.spike_trains]
-                    self.sst = self.spike_trains
+                    self.spike_amps = [sp.annotations['ica_amp'] for sp in self.spike_trains_rej]
+                    self.sst = self.spike_trains_rej
 
                 self.ica_spike_sources_idx = self.source_idx[self.independent_spike_idx]
                 self.ic_spike_sources = self.cleaned_sources_ica[self.independent_spike_idx]
                 self.A_spike_sources = self.cleaned_A_ica[self.independent_spike_idx]
                 self.W_spike_sources = self.cleaned_W_ica[self.independent_spike_idx]
 
-                self.sst = self.spike_trains
+                self.sst = self.spike_trains_rej
 
                 self.processing_time = time.time() - t_start_proc
                 print 'Elapsed time: ', self.processing_time
@@ -346,7 +350,8 @@ class SpikeSorter:
                 if self.plot_figures:
                     plt.figure()
                     plt.imshow(self.cc_matr)
-                print 'PAIRS: ', self.pairs
+                print 'PAIRS: '
+                print self.pairs
 
                 self.performance =  compute_performance(self.counts)
 
@@ -504,7 +509,8 @@ class SpikeSorter:
                 if self.plot_figures:
                     plt.figure()
                     plt.imshow(self.cc_matr)
-                print 'PAIRS: ', self.pairs
+                print 'PAIRS: '
+                print self.pairs
 
                 self.performance =  compute_performance(self.counts)
 
@@ -638,7 +644,8 @@ class SpikeSorter:
                 if self.plot_figures:
                     plt.figure()
                     plt.imshow(self.cc_matr)
-                print 'PAIRS: ', self.pairs
+                print 'PAIRS: '
+                print self.pairs
 
                 self.performance = compute_performance(self.counts)
 
@@ -696,7 +703,8 @@ class SpikeSorter:
                     f.write(str(pos[2]))
                     f.write('\n')
 
-            # write param filw
+            # write param file
+            detect_threshold = None
             params = {'samplerate': int(self.fs.rescale('Hz').magnitude), 'detect_sign': -1,
                       "adjacency_radius": radius}
             with open(join(self.mountain_folder, 'params.json'), 'w') as f:
@@ -752,7 +760,8 @@ class SpikeSorter:
                 if self.plot_figures:
                     plt.figure()
                     plt.imshow(self.cc_matr)
-                print 'PAIRS: ', self.pairs
+                print 'PAIRS: '
+                print self.pairs
 
                 self.performance =  compute_performance(self.counts)
 
@@ -793,7 +802,7 @@ class SpikeSorter:
             # create prb and prm files
             prb_path = export_prb_file(self.mea_pos.shape[0], self.electrode_name, self.spykingcircus_folder,
                                        pos=self.mea_pos, adj_dist=2*np.max(self.mea_pitch), spikesorter='spykingcircus',
-                                       radius=30)
+                                       radius=50)
 
             filename = 'recordings'
 
@@ -807,11 +816,11 @@ class SpikeSorter:
                 circus_config = f.readlines()
 
             nchan = self.recordings.shape[0]
-            threshold = self.threshold
+            threshold = 6 #6
             filter = False
 
             circus_config = ''.join(circus_config).format(
-                'numpy', float(self.fs.rescale('Hz')), prb_path, filter
+                'numpy', float(self.fs.rescale('Hz')), prb_path, threshold, filter
             )
 
             with open(join(self.spykingcircus_folder, filename + '.params'), 'w') as f:
@@ -862,7 +871,8 @@ class SpikeSorter:
                 if self.plot_figures:
                     plt.figure()
                     plt.imshow(self.cc_matr)
-                print 'PAIRS: ', self.pairs
+                print 'PAIRS: '
+                print self.pairs
 
                 self.performance =  compute_performance(self.counts)
 
@@ -969,7 +979,8 @@ class SpikeSorter:
                 if self.plot_figures:
                     plt.figure()
                     plt.imshow(self.cc_matr)
-                print 'PAIRS: ', self.pairs
+                print 'PAIRS: '
+                print self.pairs
 
                 self.performance = compute_performance(self.counts)
 

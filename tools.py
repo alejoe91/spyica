@@ -848,7 +848,7 @@ def integrate_sources(sources):
     return integ_source
 
 
-def clean_sources(sources, corr_thresh=0.7, skew_thresh=0.5):
+def clean_sources(sources, corr_thresh=0.7, skew_thresh=0.5, remove_correlated=True):
     '''
 
     Parameters
@@ -874,6 +874,7 @@ def clean_sources(sources, corr_thresh=0.7, skew_thresh=0.5):
 
     # compute correlation matrix
     corr = np.zeros((sources_sp.shape[0], sources_sp.shape[0]))
+    mi = np.zeros((sources_sp.shape[0], sources_sp.shape[0]))
     max_lag = np.zeros((sources_sp.shape[0], sources_sp.shape[0]))
     for i in range(sources_sp.shape[0]):
         s_i = sources_sp[i]
@@ -883,6 +884,7 @@ def clean_sources(sources, corr_thresh=0.7, skew_thresh=0.5):
             # cmat = ss.correlate(s_i, s_j)
             corr[i, j] = np.max(np.abs(cmat))
             max_lag[i, j] = np.argmax(np.abs(cmat))
+            mi[i, j] = calc_MI(s_i, s_j, bins=100)
 
     sources_keep, sources_discard = sources[high_sk], sources[low_sk]
 
@@ -896,7 +898,7 @@ def clean_sources(sources, corr_thresh=0.7, skew_thresh=0.5):
         remove_ic.append(idxs[np.argmin(np.abs(sk_pair))])
     remove_ic = np.array(remove_ic)
 
-    if len(remove_ic) != 0:
+    if len(remove_ic) != 0 and remove_correlated:
         mask = np.array([True] * len(sources_keep))
         mask[remove_ic] = False
 
@@ -911,7 +913,7 @@ def clean_sources(sources, corr_thresh=0.7, skew_thresh=0.5):
     # invert sources with positive skewness
     spike_sources[sk_sp > 0] = -spike_sources[sk_sp > 0]
 
-    return spike_sources, source_idx, corr_idx
+    return spike_sources, source_idx, corr_idx, corr, mi
 
 
 
@@ -1724,13 +1726,12 @@ def export_prb_file(n_elec, electrode_name, pathname,
     return full_filename
 
 
-def compute_cdf_pdf(data):
+def calc_MI(x, y, bins):
+    from sklearn.metrics import mutual_info_score
 
-    sorted_data=np.sort(data)
-    cdf = np.arange(1,len(sorted_data)+1)/float(len(sorted_data))
-    pdf = np.diff(cdf)
-
-    return cdf, pdf
+    c_xy = np.histogram2d(x, y, bins)[0]
+    mi = mutual_info_score(None, None, contingency=c_xy)
+    return mi
 
 
 
