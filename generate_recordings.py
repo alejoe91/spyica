@@ -33,6 +33,7 @@ class GenST:
 
         self.seed = seed
         np.random.seed(seed)
+        self.chunk_duration=2*pq.s
 
         self.spike_folder = spike_folder
         self.fs = float(fs) * pq.kHz
@@ -214,40 +215,89 @@ class GenST:
                 self.cons_spikes.append(cons)
         print 'Generating clean recordings'
         self.recordings = np.zeros((n_elec, n_samples))
+        self.times = np.arange(self.recordings.shape[1]) / self.fs
 
         # modulated convolution
-        # TODO add multiprocessing
         pool = multiprocessing.Pool(n_cells)
         t_start = time.time()
 
-        if not parallel:
-            for st, spike_bin in enumerate(spike_matrix):
-                print 'Convolving with spike ', st, ' out of ', spike_matrix.shape[0]
-                if self.spike_modulation == 'none':
-                    self.recordings += convolve_templates_spiketrains(spike_bin, templates[st])
+        # divide in chunks
+        chunks = []
+        if self.duration > self.chunk_duration and self.chunk_duration != 0:
+            start=0*pq.s
+            finished=False
+            while not finished:
+                chunks.append([start, start+self.chunk_duration])
+                start=start+self.chunk_duration
+                if start >= self.duration:
+                    finished = True
+            print 'Chunks: ', chunks
+
+        if len(chunks) > 0:
+            recording_chunks = []
+            for ch, chunk in enumerate(chunks):
+                print 'Generating chunk ', ch+1, ' of ', len(chunks)
+                idxs = np.where((self.times>=chunk[0]) & (self.times<chunk[1]))[0]
+                spike_matrix_chunk = spike_matrix[:, idxs]
+                rec_chunk=np.zeros((n_elec, len(idxs)))
+                amp_chunk = []
+                for i, st in enumerate(self.spgen.all_spiketrains):
+                    idxs = np.where((st >= chunk[0]) & (st < chunk[1]))[0]
+                    amp_chunk.append(self.amp_mod[i][idxs])
+
+                if not parallel:
+                    for st, spike_bin in enumerate(spike_matrix_chunk):
+                        print 'Convolving with spike ', st, ' out of ', spike_matrix_chunk.shape[0]
+                        if self.spike_modulation == 'none':
+                            rec_chunk += convolve_templates_spiketrains(spike_bin, templates[st])
+                        else:
+                            rec_chunk += convolve_templates_spiketrains(spike_bin, templates[st],
+                                                                                   modulation=True,
+                                                                                   amp_mod=amp_chunk[st])
                 else:
-                    self.recordings += convolve_templates_spiketrains(spike_bin, templates[st], modulation=True,
-                                                                      amp_mod=self.amp_mod[st])
+                    if self.spike_modulation == 'none':
+                        results = [pool.apply_async(convolve_templates_spiketrains, (spike_bin, templates[st],))
+                                   for st, spike_bin in enumerate(spike_matrix_chunk)]
+                    else:
+                        results = [pool.apply_async(convolve_templates_spiketrains,
+                                                    (st, spike_bin, templates[st], True, amp))
+                                   for st, (spike_bin, amp) in enumerate(zip(spike_matrix_chunk, amp_chunk))]
+                    for r in results:
+                        rec_chunk += r.get()
+
+                recording_chunks.append(rec_chunk)
+            self.recordings = np.hstack(recording_chunks)
         else:
-            if self.spike_modulation == 'none':
-                results = [pool.apply_async(convolve_templates_spiketrains, (spike_bin, templates[st],))
-                           for st, spike_bin in enumerate(spike_matrix)]
+            if not parallel:
+                for st, spike_bin in enumerate(spike_matrix):
+                    print 'Convolving with spike ', st, ' out of ', spike_matrix.shape[0]
+                    if self.spike_modulation == 'none':
+                        self.recordings += convolve_templates_spiketrains(spike_bin, templates[st])
+                    else:
+                        self.recordings += convolve_templates_spiketrains(spike_bin, templates[st], modulation=True,
+                                                                          amp_mod=self.amp_mod[st])
             else:
-                results = [pool.apply_async(convolve_templates_spiketrains, (st, spike_bin, templates[st], True, amp))
-                           for st, (spike_bin, amp) in enumerate(zip(spike_matrix, self.amp_mod))]
-            for r in results:
-                self.recordings += r.get()
+                if self.spike_modulation == 'none':
+                    results = [pool.apply_async(convolve_templates_spiketrains, (spike_bin, templates[st],))
+                               for st, spike_bin in enumerate(spike_matrix)]
+                else:
+                    results = [
+                        pool.apply_async(convolve_templates_spiketrains, (st, spike_bin, templates[st], True, amp))
+                        for st, (spike_bin, amp) in enumerate(zip(spike_matrix, self.amp_mod))]
+                for r in results:
+                    self.recordings += r.get()
 
         pool.close()
 
         print 'Elapsed time ', time.time() - t_start
 
-        self.clean_recordings = copy(self.recordings)
+        # self.clean_recordings = copy(self.recordings)
 
         print 'Adding noise'
         if self.noise_level > 0:
             if noise_mode == 'uncorrelated':
-                self.additive_noise = self.noise_level * np.random.randn(self.recordings.shape[0], self.recordings.shape[1])
+                self.additive_noise = self.noise_level * np.random.randn(self.recordings.shape[0],
+                                                                         self.recordings.shape[1])
                 self.recordings += self.additive_noise
             elif noise_mode == 'correlated-dist':
                 # TODO divide in chunks
@@ -273,7 +323,6 @@ class GenST:
                                                         filter_type='highpass')
             else:
                 self.recordings = filter_analog_signals(self.recordings, freq=self.bp, fs=self.fs)
-            self.times = np.arange(self.recordings.shape[1])/self.fs
             if self.plot_figures:
                 plot_mea_recording(self.recordings, self.mea_pos, self.mea_pitch, color='g')
 
