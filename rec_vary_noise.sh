@@ -16,7 +16,7 @@ else
         for n in $noise
         do
         echo "Generating recording: ncells $ncells duration $dur noise $n"
-        python generate_recordings.py -f $spikes -dur $dur -ncells $ncells -noiselev $n -sync 0 -noplot -seed $seed
+	python generate_recordings.py -f $spikes -dur $dur -ncells $ncells -noiselev $n -sync 0 -noplot -noisemod
         done
         echo All done
     fi

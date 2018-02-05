@@ -202,17 +202,20 @@ class GenST:
         self.n_isi = 5
         self.mem_isi = 10*pq.ms
         if self.spike_modulation == 'all':
+            print 'ISI modulation'
             for st in self.spgen.all_spiketrains:
                 amp, cons = ISI_amplitude_modulation(st, mrand=self.mrand, sdrand=self.sdrand,
                                                      n_spikes=self.n_isi, exp=self.exp, mem_ISI=self.mem_isi)
                 self.amp_mod.append(amp)
                 self.cons_spikes.append(cons)
         elif self.spike_modulation == 'noise':
+            print 'Noisy modulation'
             for st in self.spgen.all_spiketrains:
                 amp, cons = ISI_amplitude_modulation(st, mrand=self.mrand, sdrand=self.sdrand,
                                                      n_spikes=0, exp=self.exp, mem_ISI=self.mem_isi)
                 self.amp_mod.append(amp)
                 self.cons_spikes.append(cons)
+
         print 'Generating clean recordings'
         self.recordings = np.zeros((n_elec, n_samples))
         self.times = np.arange(self.recordings.shape[1]) / self.fs
@@ -243,20 +246,21 @@ class GenST:
                 amp_chunk = []
                 for i, st in enumerate(self.spgen.all_spiketrains):
                     idxs = np.where((st >= chunk[0]) & (st < chunk[1]))[0]
-                    amp_chunk.append(self.amp_mod[i][idxs])
+                    if self.spike_modulation != 'none':
+                        amp_chunk.append(self.amp_mod[i][idxs])
 
                 if not parallel:
                     for st, spike_bin in enumerate(spike_matrix_chunk):
                         print 'Convolving with spike ', st, ' out of ', spike_matrix_chunk.shape[0]
                         if self.spike_modulation == 'none':
-                            rec_chunk += convolve_templates_spiketrains(spike_bin, templates[st])
+                            rec_chunk += convolve_templates_spiketrains(st, spike_bin, templates[st])
                         else:
-                            rec_chunk += convolve_templates_spiketrains(spike_bin, templates[st],
+                            rec_chunk += convolve_templates_spiketrains(st, spike_bin, templates[st],
                                                                                    modulation=True,
                                                                                    amp_mod=amp_chunk[st])
                 else:
                     if self.spike_modulation == 'none':
-                        results = [pool.apply_async(convolve_templates_spiketrains, (spike_bin, templates[st],))
+                        results = [pool.apply_async(convolve_templates_spiketrains, (st, spike_bin, templates[st],))
                                    for st, spike_bin in enumerate(spike_matrix_chunk)]
                     else:
                         results = [pool.apply_async(convolve_templates_spiketrains,
@@ -332,18 +336,12 @@ class GenST:
 
     def save_spikes(self):
         ''' save meta data in old fashioned format'''
-        if self.spike_modulation:
-            self.rec_name = 'recording_' + self.rotation_type + '_' + self.electrode_name + '_' + str(self.n_cells) \
-                            + '_' + str(self.duration).replace(' ','') + '_' + self.noise_mode + '_' \
-                            + str(self.noise_level) + '_' + str(self.f_exc).replace(' ','') + '_' \
-                            + str(self.f_inh).replace(' ','') + '_modulated' \
-                            + '_' + time.strftime("%d-%m-%Y:%H:%M") + '_' + str(self.seed)
-        else:
-            self.rec_name = 'recording_' + self.rotation_type + '_' + self.electrode_name + '_' + str(self.n_cells) \
-                            + '_' + str(self.duration).replace(' ', '') + '_' + self.noise_mode + '_' \
-                            + str(self.noise_level) + '_' + str(self.f_exc).replace(' ', '') + '_' \
-                            + str(self.f_inh).replace(' ', '') + '_nonmodulated' \
-                            + '_' + time.strftime("%d-%m-%Y:%H:%M") + '_' + str(self.seed)
+        self.rec_name = 'recording_' + self.rotation_type + '_' + self.electrode_name + '_' + str(self.n_cells) \
+                        + '_' + str(self.duration).replace(' ','') + '_' + self.noise_mode + '_' \
+                        + str(self.noise_level) + '_' + str(self.f_exc).replace(' ','') + '_' \
+                        + str(self.f_inh).replace(' ','') + '_modulation_' + self.spike_modulation \
+                        + '_' + time.strftime("%d-%m-%Y:%H:%M") + '_' + str(self.seed)
+
         rec_dir = join(root_folder, 'recordings', 'convolution')
         self.rec_path = join(rec_dir, self.rec_name)
         os.makedirs(self.rec_path)
