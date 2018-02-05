@@ -2,7 +2,7 @@
 
 if [ $# == 0 ];
   then
-    echo "Supply spike path, ncells, duration, noise ('list')"
+    echo "Supply spike path, ncells, duration, noise ('list'), seed"
 else
     if [ $# == 1 ] && [ "$1" == "all" ];
       then
@@ -12,10 +12,11 @@ else
         ncells=$2
         dur=$3
         noise=$4
+        seed=$5
         for n in $noise
         do
         echo "Generating recording: ncells $ncells duration $dur noise $n"
-        python generate_recordings.py -f $spikes -dur $dur -ncells $ncells -noiselev $n -sync 0 -noplot
+        python generate_recordings.py -f $spikes -dur $dur -ncells $ncells -noiselev $n -sync 0 -noplot -noisemod
         done
         echo All done
     fi
