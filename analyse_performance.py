@@ -22,13 +22,11 @@ spikesorters = ['ica', 'mountain', 'spykingcircus'] #, 'yass']
 
 root = os.getcwd()
 seed=2904
+folder = 'recordings/convolution/noisemod'
 probe='SqMEA'
 
-all_recordings = [join(root, 'recordings', datatype, probe, f) for f in os.listdir(join(root, 'recordings',
-                                                                                        datatype, probe))
+all_recordings = [join(root, folder, f) for f in os.listdir(join(root, folder))
                   if str(seed) in f and probe in f]
-
-print all_recordings
 
 dur_vec, n_cells_vec, noise_vec, ss_vec, acc_vec, \
 sens_vec, prec_vec, false_vec, miss_vec, misclass_vec, time_vec = [], [], [], [], [], [], [], [], [], [], []
@@ -126,7 +124,7 @@ fig_comp.subplots_adjust(left=0.1, right=0.98, bottom=0.1, top=0.85, hspace=0.4,
 print "Noise analysis"
 duration = 10
 dset_filt = dset[dset['duration']==duration]
-ncells = 10
+ncells = 20
 dset_filt = dset_filt[dset_filt['ncells']==ncells]
 fig_noise = plt.figure(figsize=(9, 7))
 fig_noise.suptitle('Noise', fontsize=30)
@@ -177,57 +175,57 @@ fig_noise.subplots_adjust(left=0.1, right=0.98, bottom=0.1, top=0.85, hspace=0.4
 
 # fig_noise.tight_layout()
 
-print "Duration analysis"
-noise = 10
-dset_filt = dset[dset['noise']==noise]
-ncells = 20
-dset_filt = dset_filt[dset_filt['ncells']==ncells]
-fig_dur = plt.figure(figsize=(9, 7))
-fig_dur.suptitle('Duration', fontsize=30)
-
-ax11 = fig_dur.add_subplot(221)
-sns.pointplot(x='duration', y='accuracy', hue='spikesorter', data=dset_filt, ax=ax11, markers=['^','o','d'],
-              linestyles=['--', '-.', '-'])
-ax11.set_xlabel('')
-ax11.set_ylabel('')
-ax11.set_ylim([-5, 105])
-ax11.set_title('Accuracy (%)', y=1.02)
-legend = ax11.legend()
-legend.remove()
-
-ax12 = fig_dur.add_subplot(222)
-sns.pointplot(x='duration', y='sensitivity', hue='spikesorter', data=dset_filt, ax=ax12, markers=['^','o','d'],
-              linestyles=['--', '-.', '-'])
-ax12.set_xlabel('')
-ax12.set_ylabel('')
-ax12.set_ylim([-5, 105])
-ax12.set_title('Sensitivity (%)', y=1.02)
-ax12.legend(loc='lower left')
-
-ax21 = fig_dur.add_subplot(223)
-sns.pointplot(x='duration', y='precision', hue='spikesorter', data=dset_filt, ax=ax21, markers=['^','o','d'],
-              linestyles=['--', '-.', '-'])
-ax21.set_xlabel('')
-ax21.set_ylabel('')
-ax21.set_title('Precision (%)', y=1.02)
-ax21.set_ylim([-5, 105])
-ax21.set_xlabel('Duration ($s$)', fontsize=20)
-legend = ax21.legend()
-legend.remove()
-
-ax22 = fig_dur.add_subplot(224)
-sns.pointplot(x='duration', y='misclassification', hue='spikesorter', data=dset_filt, ax=ax22,
-              linestyles=['--', '-.', '-'], markers=['^','o','d'], lw=0.5)
-ax22.set_title('Misclassification (%)', y=1.02)
-ax22.set_ylabel('')
-ax22.set_ylim([-5, 40])
-ax22.set_xlabel('Duration ($s$)', fontsize=20)
-legend = ax22.legend()
-legend.remove()
-
-mark_subplots([ax11, ax12, ax21, ax22], xpos=-0.2, ypos=1.05, fs=25)
-simplify_axes([ax11, ax12, ax21, ax22])
-fig_dur.subplots_adjust(left=0.1, right=0.98, bottom=0.1, top=0.85, hspace=0.4, wspace=0.2)
+# print "Duration analysis"
+# noise = 10
+# dset_filt = dset[dset['noise']==noise]
+# ncells = 20
+# dset_filt = dset_filt[dset_filt['ncells']==ncells]
+# fig_dur = plt.figure(figsize=(9, 7))
+# fig_dur.suptitle('Duration', fontsize=30)
+#
+# ax11 = fig_dur.add_subplot(221)
+# sns.pointplot(x='duration', y='accuracy', hue='spikesorter', data=dset_filt, ax=ax11, markers=['^','o','d'],
+#               linestyles=['--', '-.', '-'])
+# ax11.set_xlabel('')
+# ax11.set_ylabel('')
+# ax11.set_ylim([-5, 105])
+# ax11.set_title('Accuracy (%)', y=1.02)
+# legend = ax11.legend()
+# legend.remove()
+#
+# ax12 = fig_dur.add_subplot(222)
+# sns.pointplot(x='duration', y='sensitivity', hue='spikesorter', data=dset_filt, ax=ax12, markers=['^','o','d'],
+#               linestyles=['--', '-.', '-'])
+# ax12.set_xlabel('')
+# ax12.set_ylabel('')
+# ax12.set_ylim([-5, 105])
+# ax12.set_title('Sensitivity (%)', y=1.02)
+# ax12.legend(loc='lower left')
+#
+# ax21 = fig_dur.add_subplot(223)
+# sns.pointplot(x='duration', y='precision', hue='spikesorter', data=dset_filt, ax=ax21, markers=['^','o','d'],
+#               linestyles=['--', '-.', '-'])
+# ax21.set_xlabel('')
+# ax21.set_ylabel('')
+# ax21.set_title('Precision (%)', y=1.02)
+# ax21.set_ylim([-5, 105])
+# ax21.set_xlabel('Duration ($s$)', fontsize=20)
+# legend = ax21.legend()
+# legend.remove()
+#
+# ax22 = fig_dur.add_subplot(224)
+# sns.pointplot(x='duration', y='misclassification', hue='spikesorter', data=dset_filt, ax=ax22,
+#               linestyles=['--', '-.', '-'], markers=['^','o','d'], lw=0.5)
+# ax22.set_title('Misclassification (%)', y=1.02)
+# ax22.set_ylabel('')
+# ax22.set_ylim([-5, 40])
+# ax22.set_xlabel('Duration ($s$)', fontsize=20)
+# legend = ax22.legend()
+# legend.remove()
+#
+# mark_subplots([ax11, ax12, ax21, ax22], xpos=-0.2, ypos=1.05, fs=25)
+# simplify_axes([ax11, ax12, ax21, ax22])
+# fig_dur.subplots_adjust(left=0.1, right=0.98, bottom=0.1, top=0.85, hspace=0.4, wspace=0.2)
 
 plt.ion()
 plt.show()

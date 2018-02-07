@@ -377,18 +377,22 @@ class SpikeSorter:
             if self.run_ss:
                 print 'Applying smoothed ICA'
                 t_start = time.time()
-                self.s_sica, self.A_sica, self.W_sica, self.nonlin = sICA.smoothICA(self.recordings) #, self.nonlin, self.nonlin_inv
+                self.s_sica, self.A_sica, self.W_sica, self.nonlin, self.white = sICA.smoothICA(self.recordings) #, self.nonlin, self.nonlin_inv
+                # self.bin_center, self.h_center, self.fit_values, self.popt = sICA.smoothICA(self.recordings)
+
 
                 if self.plot_figures:
                     plot_mea_recording(self.s_sica, self.mea_pos, self.mea_pitch, color='r')
 
                 # clean sources based on skewness and correlation
-                spike_sources, self.source_idx, self.correlated_pairs = clean_sources(self.s_sica,
+                spike_sources, self.source_idx, self.correlated_pairs, self.corr, self.mi = clean_sources(self.s_sica,
                                                                                       corr_thresh=self.corr_thresh,
-                                                                                      skew_thresh=self.skew_thresh)
+                                                                                      skew_thresh=self.skew_thresh,
+                                                                                      remove_correlated=False)
                 if self.plot_figures:
                     plt.figure()
-                    plt.plot(np.transpose(spike_sources))
+                    if len(spike_sources) > 0:
+                        plt.plot(np.transpose(spike_sources))
 
                 self.cleaned_sources_sica = spike_sources
                 print 'Number of cleaned sources: ', self.cleaned_sources_sica.shape[0]
@@ -396,7 +400,6 @@ class SpikeSorter:
                 plt.matshow(self.nonlin[0])
                 plt.matshow(self.nonlin[-1])
 
-                # raise Exception()
 
                 # print 'Clustering Sources with: ', self.clustering
                 # if self.clustering=='kmeans':
@@ -816,7 +819,7 @@ class SpikeSorter:
                 circus_config = f.readlines()
 
             nchan = self.recordings.shape[0]
-            threshold = 6 #6
+            threshold = 5.25 #6
             filter = False
 
             circus_config = ''.join(circus_config).format(
@@ -836,6 +839,7 @@ class SpikeSorter:
                     os.chdir(self.spykingcircus_folder)
                     t_start_proc = time.time()
                     subprocess.check_output(['spyking-circus', 'recordings.npy', '-c', str(n_cores)])
+                    # subprocess.call(['spyking-circus', 'recordings.npy', '-m', 'merging', '-c', str(n_cores)])
                     self.processing_time = time.time() - t_start_proc
                     print 'Elapsed time: ', self.processing_time
                 except subprocess.CalledProcessError as e:
@@ -844,27 +848,29 @@ class SpikeSorter:
                 print 'Parsing output files...'
                 os.chdir(self.root)
 
-                f = h5py.File(join(self.spykingcircus_folder, filename, filename + '.clusters.hdf5'))
+                f = h5py.File(join(self.spykingcircus_folder, filename, filename + '.result.hdf5'))
                 self.spike_times = []
                 self.spike_clusters = []
 
-                for key in f.keys():
-                    if 'times' in key:
-                        self.spike_times.append(f[key].value)
-                        self.spike_clusters.append(int(key.split('_')[-1]))
+                for temp in f['spiketimes'].keys():
+                    self.spike_times.append(f['spiketimes'][temp].value)
+                    self.spike_clusters.append(int(temp.split('_')[-1]))
 
                 self.spike_trains = []
                 self.counts = 0
 
-                for st in self.spike_times:
+                for i_st, st in enumerate(self.spike_times):
                     count = len(st)
                     self.counts += count
                     if count > self.minimum_spikes_per_cluster:
                         spike_times = self.times[sorted(st)]
                         spiketrain = neo.SpikeTrain(spike_times, t_start=0 * pq.s, t_stop=self.gtst[0].t_stop)
                         self.spike_trains.append(spiketrain)
+                    else:
+                        print 'Discarded spike train ', i_st
 
                 self.sst = self.spike_trains
+                print 'Found ', len(self.sst), ' independent spiketrains!'
 
                 print 'Evaluating spiketrains...'
                 self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
@@ -1091,6 +1097,11 @@ if __name__ == '__main__':
         tstop = sys.argv[pos + 1]
     else:
         tstop = None
+    if '-thresh' in sys.argv:
+        pos = sys.argv.index('-thresh')
+        thresh = int(sys.argv[pos + 1])
+    else:
+        thresh = 4
     if '-L' in sys.argv:
         pos = sys.argv.index('-L')
         lag = int(sys.argv[pos + 1])
