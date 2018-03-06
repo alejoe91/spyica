@@ -19,9 +19,10 @@ import h5py
 
 # import spiketrain_generator as stg
 from tools import *
-from plot_spikeMEA import *
+from neuroplot import *
 import ICA as ica
 import smoothICA as sICA
+import orICA
 # from sfa.incsfa import IncSFANode
 # from sfa.trainer import TrainerNode
 # import sfa.incsfa as sfa
@@ -30,7 +31,7 @@ root_folder = os.getcwd()
 
 class SpikeSorter:
     def __init__(self, save=False, rec_folder=None, alg=None, lag=None, gfmode=None, duration=None,
-                 tstart=None, tstop=None, run_ss=None, plot_figures=True):
+                 tstart=None, tstop=None, run_ss=None, plot_figures=True, merge_spikes=False, mu=0, eta=0):
         self.rec_folder = rec_folder
         self.rec_name = os.path.split(rec_folder)[-1]
         if self.rec_name == '':
@@ -46,15 +47,16 @@ class SpikeSorter:
         self.tstart = tstart
         self.tstop = tstop
         self.run_ss = run_ss
+        self.merge_spikes = merge_spikes
 
         self.model = alg
         self.corr_thresh = 0.2
-        self.skew_thresh = 0.2
+        self.skew_thresh = 0.1
         self.root = os.getcwd()
         sys.path.append(self.root)
 
         self.clustering = 'mog'
-        self.threshold = 4
+        self.threshold = 4.5
 
         self.minimum_spikes_per_cluster = 15
 
@@ -163,8 +165,10 @@ class SpikeSorter:
                 raise Exception('set at least tstop or duration')
 
         self.ica = False
+        self.orica = False
         self.smooth = False
         self.cica = False
+        self.corica = False
         self.gfica = False
         self.klusta = False
         self.kilo = False
@@ -182,10 +186,14 @@ class SpikeSorter:
             alg_split = alg.lower().split('-')
             if 'ica' in alg_split:
                 self.ica = True
+            if 'orica' in alg_split:
+                self.orica = True
             if 'smooth' in alg_split:
                 self.smooth = True
             if 'cica' in alg_split:
                 self.cica = True
+            if 'corica' in alg_split:
+                self.corica = True
             if 'gfica' in alg_split:
                 self.gfica = True
             if 'klusta' in alg_split:
@@ -218,7 +226,7 @@ class SpikeSorter:
                                                                  n_chunks=n_chunks, chunk_size=chunk_size)
 
                 if self.plot_figures:
-                    plot_mea_recording(self.s_ica, self.mea_pos, self.mea_pitch, color='r')
+                    plot_mea_recording(self.s_ica, self.mea_pos, self.mea_pitch, colors='r', scalebar=False)
 
                 # clean sources based on skewness and correlation
                 spike_sources, self.source_idx, self.correlated_pairs, self.corr, self.mi = clean_sources(self.s_ica,
@@ -245,10 +253,10 @@ class SpikeSorter:
                     self.spike_amps = [sp.annotations['ica_amp'] for sp in self.detected_spikes]
 
                     self.spike_trains, self.amps, self.nclusters, self.keep, self.score = \
-                        cluster_spike_amplitudes(self.spike_amps, self.detected_spikes, metric='cal',
+                        cluster_spike_amplitudes(self.detected_spikes, metric='cal',
                                                  alg=self.clustering)
 
-                    # TODO look into discurded clusters if unknown spiketrains are found
+                    # TODO look into discarded clusters if unknown spiketrains are found
                     # for each source, keep the spikes cluster with largest amplitude
                     # self.sst = []
                     # group_ids = np.unique([sp.annotations['group_id'] for sp in self.possible_sst])
@@ -372,6 +380,179 @@ class SpikeSorter:
                 np.save(join(self.ica_folder, 'results', 'performance'), self.performance)
                 np.save(join(self.ica_folder, 'results', 'time'), self.processing_time)
 
+        if self.orica:
+            # TODO: quantify smoothing with and without mu
+            if self.run_ss:
+                print 'Applying Online Recursive ICA'
+                t_start = time.time()
+                chunk_size = int(2 * pq.s * self.fs.rescale('Hz'))
+                n_chunks = 1
+                adj_graph = extract_adjacency(self.mea_pos, np.max(self.mea_pitch) + 5)
+                self.s_orica, self.A_orica, self.W_orica = orICA.instICA(self.recordings,
+                                                                         n_chunks=n_chunks, chunk_size=chunk_size,
+                                                                         mu=mu, adjacency_graph=adj_graph)
+                self.avg_smoothing = []
+                for i in range(self.recordings.shape[0]):
+                    self.avg_smoothing.append(np.mean(np.abs([self.W_orica[i, j] - 1. / len(adj) *
+                                                              np.sum(self.W_orica[i, adj])
+                                                              for j, adj in enumerate(adj_graph)])))
+
+                if self.plot_figures:
+                    plot_mea_recording(self.s_orica, self.mea_pos, self.mea_pitch, colors='r', scalebar=False)
+
+                # clean sources based on skewness and correlation
+                spike_sources, self.source_idx, self.correlated_pairs, self.corr, self.mi = clean_sources(self.s_orica,
+                                                                                      corr_thresh=self.corr_thresh,
+                                                                                      skew_thresh=self.skew_thresh,
+                                                                                      remove_correlated=False)
+                if self.plot_figures:
+                    plt.figure()
+                    if len(spike_sources) > 0:
+                        plt.plot(np.transpose(spike_sources))
+
+                self.cleaned_sources_orica = spike_sources
+                self.cleaned_A_orica = self.A_orica[self.source_idx]
+                self.cleaned_W_orica = self.W_orica[self.source_idx]
+                self.cleaned_smoothing = np.array(self.avg_smoothing)[self.source_idx]
+                print 'Number of cleaned sources: ', self.cleaned_sources_orica.shape[0]
+
+
+                print 'Clustering Sources with: ', self.clustering
+                if self.clustering=='kmeans' or self.clustering=='mog':
+                    # detect spikes and align
+                    self.detected_spikes = detect_and_align(spike_sources, self.fs, self.recordings,
+                                                            t_start=self.gtst[0].t_start,
+                                                            t_stop=self.gtst[0].t_stop, n_std=self.threshold)
+                    self.spike_amps = [sp.annotations['ica_amp'] for sp in self.detected_spikes]
+
+                    self.spike_trains, self.amps, self.nclusters, self.keep, self.score = \
+                        cluster_spike_amplitudes(self.detected_spikes, metric='cal',
+                                                 alg=self.clustering,
+                                                 features='pca', keep_all=True)
+
+                    print 'Number of spike trains after clustering: ', len(self.spike_trains)
+
+                    self.spike_trains_rej, self.independent_spike_idx, self.dup = \
+                        reject_duplicate_spiketrains(self.spike_trains)
+                    self.sst = self.spike_trains_rej
+                else:
+                    self.spike_trains = detect_and_align(spike_sources, self.fs, self.recordings,
+                                                         t_start=self.gtst[0].t_start,
+                                                         t_stop=self.gtst[0].t_stop)
+                    self.spike_trains, self.independent_spike_idx = reject_duplicate_spiketrains(self.spike_trains)
+                    self.orica_spike_sources_idx = self.source_idx[self.independent_spike_idx]
+                    self.orica_spike_sources = self.cleaned_sources_orica[self.independent_spike_idx]
+                    self.spike_amps = [sp.annotations['ica_amp'] for sp in self.spike_trains]
+                    self.sst = self.spike_trains
+
+                if 'ica_source' in self.spike_trains[0].annotations.keys():
+                    self.independent_spike_idx = [s.annotations['ica_source'] for s in self.sst]
+
+                self.orica_spike_sources_idx = self.source_idx[self.independent_spike_idx]
+                self.orica_spike_sources = self.cleaned_sources_orica[self.independent_spike_idx]
+                self.orA_spike_sources = self.cleaned_A_orica[self.independent_spike_idx]
+                self.orW_spike_sources = self.cleaned_W_orica[self.independent_spike_idx]
+                self.orica_smoothing_spike_sources = self.cleaned_smoothing[self.independent_spike_idx]
+
+                print 'Average smoothing: ', np.mean(self.orica_smoothing_spike_sources), ' mu=', mu
+                print 'Elapsed time: ', time.time() - t_start
+
+                self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
+                if self.plot_figures:
+                    plt.figure()
+                    plt.imshow(self.cc_matr)
+                print self.pairs
+
+                self.performance =  compute_performance(self.counts)
+
+                if self.plot_figures:
+                    fig = plt.figure()
+                    ax1 = fig.add_subplot(211)
+                    ax2 = fig.add_subplot(212)
+
+                    raster_plots(self.gtst, color_st=self.pairs[:, 0], ax=ax1)
+                    raster_plots(self.sst, color_st=self.pairs[:, 1], ax=ax2)
+
+                    ax1.set_title('ORICA', fontsize=20)
+
+        if self.corica:
+            if self.run_ss:
+                print 'Applying Convolutive Online Recursive ICA'
+                t_start = time.time()
+                chunk_size = int(2 * pq.s * self.fs.rescale('Hz'))
+                n_chunks = 1
+                self.s_orica, self.A_orica, self.W_orica = orICA.cICAemb(self.recordings)
+
+                if self.plot_figures:
+                    plot_mea_recording(self.s_orica, self.mea_pos, self.mea_pitch, colors='r', scalebar=False)
+
+                # clean sources based on skewness and correlation
+                spike_sources, self.source_idx, self.correlated_pairs, self.corr, self.mi = clean_sources(self.s_orica,
+                                                                                      corr_thresh=self.corr_thresh,
+                                                                                      skew_thresh=self.skew_thresh,
+                                                                                      remove_correlated=False)
+                if self.plot_figures:
+                    plt.figure()
+                    if len(spike_sources) > 0:
+                        plt.plot(np.transpose(spike_sources))
+
+                self.cleaned_sources_orica = spike_sources
+                self.cleaned_A_orica = self.A_orica[self.source_idx]
+                self.cleaned_W_orica = self.W_orica[self.source_idx]
+                print 'Number of cleaned sources: ', self.cleaned_sources_orica.shape[0]
+
+
+                print 'Clustering Sources with: ', self.clustering
+                if self.clustering=='kmeans' or self.clustering=='mog':
+                    # detect spikes and align
+                    self.detected_spikes = detect_and_align(spike_sources, self.fs, self.recordings,
+                                                            t_start=self.gtst[0].t_start,
+                                                            t_stop=self.gtst[0].t_stop, n_std=self.threshold)
+                    self.spike_amps = [sp.annotations['ica_amp'] for sp in self.detected_spikes]
+
+                    self.spike_trains, self.amps, self.nclusters, self.keep, self.score = \
+                        cluster_spike_amplitudes(self.detected_spikes, metric='cal',
+                                                 alg=self.clustering)
+
+                    self.spike_trains_rej, self.independent_spike_idx, self.dup = \
+                        reject_duplicate_spiketrains(self.spike_trains)
+                else:
+                    self.spike_trains = detect_and_align(spike_sources, self.fs, self.recordings,
+                                                         t_start=self.gtst[0].t_start,
+                                                         t_stop=self.gtst[0].t_stop)
+                    self.spike_trains, self.independent_spike_idx = reject_duplicate_spiketrains(self.spike_trains)
+                    self.orica_spike_sources_idx = self.source_idx[self.independent_spike_idx]
+                    self.orica_spike_sources = self.cleaned_sources_orica[self.independent_spike_idx]
+                    self.spike_amps = [sp.annotations['ica_amp'] for sp in self.spike_trains]
+                    self.sst = self.spike_trains
+
+                self.orica_spike_sources_idx = self.source_idx[self.independent_spike_idx]
+                self.oric_spike_sources = self.cleaned_sources_orica[self.independent_spike_idx]
+                self.orA_spike_sources = self.cleaned_A_orica[self.independent_spike_idx]
+                self.orW_spike_sources = self.cleaned_W_orica[self.independent_spike_idx]
+
+                self.sst = self.spike_trains_rej
+
+                print 'Elapsed time: ', time.time() - t_start
+
+                self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
+                if self.plot_figures:
+                    plt.figure()
+                    plt.imshow(self.cc_matr)
+                print self.pairs
+
+                self.performance =  compute_performance(self.counts)
+
+                if self.plot_figures:
+                    fig = plt.figure()
+                    ax1 = fig.add_subplot(211)
+                    ax2 = fig.add_subplot(212)
+
+                    raster_plots(self.gtst, color_st=self.pairs[:, 0], ax=ax1)
+                    raster_plots(self.sst, color_st=self.pairs[:, 1], ax=ax2)
+
+                    ax1.set_title('ORICA', fontsize=20)
+
 
         if self.smooth:
             if self.run_ss:
@@ -382,7 +563,7 @@ class SpikeSorter:
 
 
                 if self.plot_figures:
-                    plot_mea_recording(self.s_sica, self.mea_pos, self.mea_pitch, color='r')
+                    plot_mea_recording(self.s_sica, self.mea_pos, self.mea_pitch, colors='r', scalebar=False)
 
                 # clean sources based on skewness and correlation
                 spike_sources, self.source_idx, self.correlated_pairs, self.corr, self.mi = clean_sources(self.s_sica,
@@ -395,55 +576,64 @@ class SpikeSorter:
                         plt.plot(np.transpose(spike_sources))
 
                 self.cleaned_sources_sica = spike_sources
+                self.cleaned_A_sica = self.A_sica[self.source_idx]
+                self.cleaned_W_sica = self.W_sica[self.source_idx]
                 print 'Number of cleaned sources: ', self.cleaned_sources_sica.shape[0]
 
                 plt.matshow(self.nonlin[0])
                 plt.matshow(self.nonlin[-1])
 
 
-                # print 'Clustering Sources with: ', self.clustering
-                # if self.clustering=='kmeans':
-                #     # detect spikes and align
-                #     self.spike_trains = detect_and_align(spike_sources, self.fs, self.recordings,
-                #                                          t_start=self.gtst[0].t_start,
-                #                                          t_stop=self.gtst[0].t_stop)
-                #     self.spike_amps = [sp.annotations['ica_amp'] for sp in self.spike_trains]
-                #
-                #     self.sst, self.amps, self.nclusters, keep, score = \
-                #         cluster_spike_amplitudes(self.spike_amps, self.spike_trains, metric='cal', alg=self.clustering)
-                #     self.sst, self.independent_spike_idx, self.duplicates = reject_duplicate_spiketrains(self.sst)
-                #
-                #     self.sica_spike_sources_idx = self.source_idx[self.independent_spike_idx]
-                #     self.sica_spike_sources = self.cleaned_sources_sica[self.independent_spike_idx]
-                # else:
-                #     self.spike_trains = detect_and_align(spike_sources, self.fs, self.recordings,
-                #                                          t_start=self.gtst[0].t_start,
-                #                                          t_stop=self.gtst[0].t_stop)
-                #     self.spike_trains, self.independent_spike_idx = reject_duplicate_spiketrains(self.spike_trains)
-                #     self.sica_spike_sources_idx = self.source_idx[self.independent_spike_idx]
-                #     self.sica_spike_sources = self.cleaned_sources_sica[self.independent_spike_idx]
-                #     self.spike_amps = [sp.annotations['ica_amp'] for sp in self.spike_trains]
-                #     self.sst = self.spike_trains
-                #
-                # print 'Elapsed time: ', time.time() - t_start
-                #
-                # self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
-                # if self.plot_figures:
-                #     plt.figure()
-                #     plt.imshow(self.cc_matr)
-                # print self.pairs
-                #
-                # self.performance =  compute_performance(self.counts)
-                #
-                # if self.plot_figures:
-                #     fig = plt.figure()
-                #     ax1 = fig.add_subplot(211)
-                #     ax2 = fig.add_subplot(212)
-                #
-                #     raster_plots(self.gtst, color_st=self.pairs[:, 0], ax=ax1)
-                #     raster_plots(self.sst, color_st=self.pairs[:, 1], ax=ax2)
-                #
-                #     ax1.set_title('smoothICA', fontsize=20)
+                print 'Clustering Sources with: ', self.clustering
+                if self.clustering=='kmeans' or self.clustering=='mog':
+                    # detect spikes and align
+                    self.detected_spikes = detect_and_align(spike_sources, self.fs, self.recordings,
+                                                            t_start=self.gtst[0].t_start,
+                                                            t_stop=self.gtst[0].t_stop, n_std=self.threshold)
+                    self.spike_amps = [sp.annotations['ica_amp'] for sp in self.detected_spikes]
+
+                    self.spike_trains, self.amps, self.nclusters, self.keep, self.score = \
+                        cluster_spike_amplitudes(self.detected_spikes, metric='cal',
+                                                 alg=self.clustering)
+
+                    self.spike_trains_rej, self.independent_spike_idx, self.dup = \
+                        reject_duplicate_spiketrains(self.spike_trains)
+                else:
+                    self.spike_trains = detect_and_align(spike_sources, self.fs, self.recordings,
+                                                         t_start=self.gtst[0].t_start,
+                                                         t_stop=self.gtst[0].t_stop)
+                    self.spike_trains, self.independent_spike_idx = reject_duplicate_spiketrains(self.spike_trains)
+                    self.sica_spike_sources_idx = self.source_idx[self.independent_spike_idx]
+                    self.sica_spike_sources = self.cleaned_sources_sica[self.independent_spike_idx]
+                    self.spike_amps = [sp.annotations['ica_amp'] for sp in self.spike_trains]
+                    self.sst = self.spike_trains
+
+                self.sica_spike_sources_idx = self.source_idx[self.independent_spike_idx]
+                self.sic_spike_sources = self.cleaned_sources_sica[self.independent_spike_idx]
+                self.sA_spike_sources = self.cleaned_A_sica[self.independent_spike_idx]
+                self.sW_spike_sources = self.cleaned_W_sica[self.independent_spike_idx]
+
+                self.sst = self.spike_trains_rej
+
+                print 'Elapsed time: ', time.time() - t_start
+
+                self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
+                if self.plot_figures:
+                    plt.figure()
+                    plt.imshow(self.cc_matr)
+                print self.pairs
+
+                self.performance =  compute_performance(self.counts)
+
+                if self.plot_figures:
+                    fig = plt.figure()
+                    ax1 = fig.add_subplot(211)
+                    ax2 = fig.add_subplot(212)
+
+                    raster_plots(self.gtst, color_st=self.pairs[:, 0], ax=ax1)
+                    raster_plots(self.sst, color_st=self.pairs[:, 1], ax=ax2)
+
+                    ax1.set_title('smoothICA', fontsize=20)
 
         if self.klusta:
             print 'Applying Klustakwik algorithm'
@@ -819,11 +1009,16 @@ class SpikeSorter:
                 circus_config = f.readlines()
 
             nchan = self.recordings.shape[0]
-            threshold = 5.25 #6
+            threshold = 6 #6
             filter = False
 
+            if self.merge_spikes:
+                auto=1e-5
+            else:
+                auto=0
+
             circus_config = ''.join(circus_config).format(
-                'numpy', float(self.fs.rescale('Hz')), prb_path, threshold, filter
+                'numpy', float(self.fs.rescale('Hz')), prb_path, threshold, filter, auto
             )
 
             with open(join(self.spykingcircus_folder, filename + '.params'), 'w') as f:
@@ -839,7 +1034,8 @@ class SpikeSorter:
                     os.chdir(self.spykingcircus_folder)
                     t_start_proc = time.time()
                     subprocess.check_output(['spyking-circus', 'recordings.npy', '-c', str(n_cores)])
-                    # subprocess.call(['spyking-circus', 'recordings.npy', '-m', 'merging', '-c', str(n_cores)])
+                    if self.merge_spikes:
+                        subprocess.call(['spyking-circus', 'recordings.npy', '-m', 'merging', '-c', str(n_cores)])
                     self.processing_time = time.time() - t_start_proc
                     print 'Elapsed time: ', self.processing_time
                 except subprocess.CalledProcessError as e:
@@ -847,8 +1043,10 @@ class SpikeSorter:
 
                 print 'Parsing output files...'
                 os.chdir(self.root)
-
-                f = h5py.File(join(self.spykingcircus_folder, filename, filename + '.result.hdf5'))
+                if self.merge_spikes:
+                    f = h5py.File(join(self.spykingcircus_folder, filename, filename + '.result-merged.hdf5'))
+                else:
+                    f = h5py.File(join(self.spykingcircus_folder, filename, filename + '.result.hdf5'))
                 self.spike_times = []
                 self.spike_clusters = []
 
@@ -1120,9 +1318,23 @@ if __name__ == '__main__':
         plot_figures=False
     else:
         plot_figures=True
+    if '-merge' in sys.argv:
+        merge_spikes=True
+    else:
+        merge_spikes=False
+    if '-mu' in sys.argv:
+        pos = sys.argv.index('-mu')
+        mu = float(sys.argv[pos + 1])
+    else:
+        mu = 0
+    if '-eta' in sys.argv:
+        pos = sys.argv.index('-eta')
+        eta = float(sys.argv[pos + 1])
+    else:
+        eta = 0
 
     if len(sys.argv) == 1:
-        print 'Arguments: \n   -r recording filename\n   -mod ICA - cICA - smooth - gfICA - klusta' \
+        print 'Arguments: \n   -r recording filename\n   -mod ICA - cICA - orica - smooth - gfICA - klusta' \
               'kilosort - mountainsort - spykingcircus  -yass\n   -dur duration in s\n   -tstart start time in s\n' \
               '   -tstop stop time in s' \
               '-L   cICA lag\n   -gfmode gradient-flow mode (time - space - spacetime)\n  '
@@ -1135,127 +1347,26 @@ if __name__ == '__main__':
         raise AttributeError('Provide model folder for data')
     else:
         sps = SpikeSorter(save=True, rec_folder=rec_folder, alg=mod, lag=lag, gfmode=gfmode, duration=dur,
-                          tstart=tstart, tstop=tstop, run_ss=spikesort, plot_figures=plot_figures)
+                          tstart=tstart, tstop=tstop, run_ss=spikesort, plot_figures=plot_figures,
+                          merge_spikes=merge_spikes, mu=mu, eta=eta)
 
-        #
-        # if self.cica:
-        #     if self.run_ss:
-        #         print 'Applying convolutive embedded ICA'
-        #         t_start = time.time()
-        #         self.s_cica, self.A_cica, self.W_cica = ica.cICAemb(self.recordings, L=self.lag)
-        #         print 'Elapsed time: ', time.time() - t_start
-        #
-        #         if self.plot_figures:
-        #             plot_mea_recording(self.s_cica, self.mea_pos, self.mea_dim, color='r')
-        #
-        #         # clean sources based on skewness and correlation
-        #         spike_sources, self.source_idx, self.correlated_pairs = clean_sources(self.s_cica, corr_thresh=self.corr_thresh,
-        #                                                                               skew_thresh=self.skew_thresh)
-        #         if self.plot_figures:
-        #             plt.figure()
-        #             plt.plot(np.transpose(spike_sources))
-        #
-        #         self.cleaned_sources_cica = spike_sources
-        #         print 'Number of cleaned sources: ', self.cleaned_sources_cica.shape[0]
-        #
-        #         # detect spikes and align
-        #         self.spike_trains = detect_and_align(spike_sources, self.fs, self.recordings,
-        #                                              t_start=self.gtst[0].t_start,
-        #                                              t_stop=self.gtst[0].t_stop)
-        #
-        #         self.spike_amps = [sp.annotations['ica_amp'] for sp in self.spike_trains]
-        #
-        #         self.sst, self.amps, self.nclusters, keep, score = \
-        #             cluster_spike_amplitudes(self.spike_amps, self.spike_trains, metric='cal', alg=self.clustering)
-        #
-        #         self.sst, self.independent_spike_idx, self.duplicates = reject_duplicate_spiketrains(self.sst)
-        #         self.cica_spike_sources_idx = self.source_idx[self.independent_spike_idx]
-        #         self.cica_spike_sources = self.cleaned_sources_cica[self.independent_spike_idx]
-        #
-        #         self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
-        #         if self.plot_figures:
-        #             plt.figure()
-        #             plt.imshow(self.cc_matr)
-        #         print self.pairs
-        #
-        #         self.performance =  compute_performance(self.counts)
-        #
-        #         if self.plot_figures:
-        #             fig = plt.figure()
-        #             ax1 = fig.add_subplot(211)
-        #             ax2 = fig.add_subplot(212)
-        #
-        #             sst_order = self.pairs[:, 1]
-        #
-        #             raster_plots(self.gtst, color_st=self.pairs[:, 0], ax=ax1)
-        #             raster_plots(self.sst, color_st=self.pairs[:, 1], ax=ax2)
-        #
-        #             ax1.set_title('cICA GT', fontsize=20)
-        #             ax2.set_title('cICA ST', fontsize=20)
-        #
-        # if self.gfica:
-        #     if self.run_ss:
-        #         print 'Applying gradient-flow ICA'
-        #         t_start = time.time()
-        #         self.s_gfica, self.A_gfica, self.W_gfica = ica.gFICA(self.recordings, self.mea_dim, mode=self.gfmode)
-        #         # s_gf_int = integrate_sources(s_gf)
-        #         print 'Elapsed time: ', time.time() - t_start
-        #
-        #         # gf_mea = np.reshape(np.reshape(mea_pos, (mea_dim[0], mea_dim[1], mea_pos.shape[1]))[:-1, :-1],
-        #         #                     ((mea_dim[0]-1)*(mea_dim[1]-1), mea_pos.shape[1]))
-        #         # gf_dim = (mea_dim[0]-1, mea_dim[1]-1)
-        #         #
-        #         # print 'Elapsed time: ', time.time() - t_start
-        #
-        #         if self.plot_figures:
-        #             plot_mea_recording(self.s_gfica[:n_elec], self.mea_pos, self.mea_dim, color='r')
-        #             plot_mea_recording(self.s_gfica[:n_elec], self.mea_pos, self.mea_dim, color='g')
-        #             plot_mea_recording(self.s_gfica[:n_elec], self.mea_pos, self.mea_dim, color='bhn')
-        #
-        #         # clean sources based on skewness and correlation
-        #         spike_sources, self.source_idx, self.correlated_pairs = clean_sources(self.s_gfica,
-        #                                                                               corr_thresh=self.corr_thresh,
-        #                                                                               skew_thresh=self.skew_thresh)
-        #
-        #         if self.plot_figures:
-        #             plt.figure()
-        #             plt.plot(np.transpose(spike_sources))
-        #
-        #         self.cleaned_sources_gfica = spike_sources
-        #         print 'Number of cleaned sources: ', self.cleaned_sources_gfica.shape[0]
-        #
-        #
-        #         # detect spikes and align
-        #         self.spike_trains = detect_and_align(spike_sources, self.fs, self.recordings,
-        #                                              t_start=self.gtst[0].t_start,
-        #                                              t_stop=self.gtst[0].t_stop)
-        #
-        #         self.spike_amps = [sp.annotations['ica_amp'] for sp in self.spike_trains]
-        #
-        #         self.sst, self.amps, self.nclusters, keep, score = \
-        #             cluster_spike_amplitudes(self.spike_amps, self.spike_trains, metric='cal', alg=self.clustering)
-        #
-        #         self.sst, self.independent_spike_idx, self.duplicates = reject_duplicate_spiketrains(self.sst)
-        #         self.gfica_spike_sources_idx = self.source_idx[self.independent_spike_idx]
-        #         self.gfica_spike_sources = self.cleaned_sources_gfica[self.independent_spike_idx]
-        #
-        #         self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
-        #         if self.plot_figures:
-        #             plt.figure()
-        #             plt.imshow(self.cc_matr)
-        #         print self.pairs
-        #
-        #         self.performance =  compute_performance(self.counts)
-        #
-        #         if self.plot_figures:
-        #             fig = plt.figure()
-        #             ax1 = fig.add_subplot(211)
-        #             ax2 = fig.add_subplot(212)
-        #
-        #             sst_order = self.pairs[:, 1]
-        #
-        #             raster_plots(self.gtst, color_st=self.pairs[:, 0], ax=ax1)
-        #             raster_plots(self.sst, color_st=self.pairs[:, 1], ax=ax2)
-        #
-        #             ax1.set_title('gfICA GT', fontsize=20)
-        #             ax2.set_title('gfICA ST', fontsize=20)
+def templates_weights(templates, weights, pairs, mea_pos, mea_dim, mea_pitch):
+    n_neurons = len(templates)
+    cols = int(np.ceil(np.sqrt(n_neurons)))
+    rows = int(np.ceil(n_neurons/float(cols)))
+    fig_t = plt.figure()
+    fig_w = plt.figure()
+
+    min_v = np.min(templates)
+
+    for n in range(n_neurons):
+        ax_t = fig_t.add_subplot(rows, cols, n+1)
+        ax_w = fig_w.add_subplot(rows, cols, n+1)
+
+        plot_mea_recording(templates[n], mea_pos, mea_pitch, ax=ax_t)
+        if pairs[n, 0] != -1:
+            plot_weight(weights[pairs[n, 1]], mea_dim, ax=ax_w)
+        else:
+            ax_w.axis('off')
+
+    return fig_t, fig_w

@@ -34,97 +34,14 @@ def load(filename):
 
 #     return coeff, latent, projections
 
+def apply_pca(X, n_comp):
+    from sklearn.decomposition import PCA
 
+    # whiten data
+    pca = PCA(n_components=n_comp)
+    data = pca.fit_transform(np.transpose(X))
 
-
-# from sklearn.utils.extmath                                                                                          
-
-def svd_flip(u, v, u_based_decision=True):
-    """Sign correction to ensure deterministic output from SVD.                                                       
-    Adjusts the columns of u and the rows of v such that the loadings in the                                          
-    columns in u that are largest in absolute value are always positive.                                              
-    Parameters                                                                                                        
-    ----------                                                                                                        
-    u, v : ndarray                                                                                                    
-        u and v are the output of `linalg.svd` or                                                                     
-        `sklearn.utils.extmath.randomized_svd`, with matching inner dimensions                                        
-        so one can compute `np.dot(u * s, v)`.                                                                        
-    u_based_decision : boolean, (default=True)                                                                        
-        If True, use the columns of u as the basis for sign flipping.                                                 
-        Otherwise, use the rows of v. The choice of which variable to base the                                        
-        decision on is generally algorithm dependent.                                                                 
-    Returns                                                                                                           
-    -------                                                                                                           
-    u_adjusted, v_adjusted : arrays with the same dimensions as the input.                                            
-    """
-    if u_based_decision:
-        # columns of u, rows of v                                                                                     
-        max_abs_cols = np.argmax(np.abs(u), axis=0)
-        signs = np.sign(u[max_abs_cols, xrange(u.shape[1])])
-        u *= signs
-        v *= signs[:, np.newaxis]
-    else:
-        # rows of v, columns of u                                                                                     
-        max_abs_rows = np.argmax(np.abs(v), axis=1)
-        signs = np.sign(v[xrange(v.shape[0]), max_abs_rows])
-        u *= signs
-        v *= signs[:, np.newaxis]
-    return u, v
-
-
-def apply_pca(data, n_components = None, bias=False, standardize_vars=False,flip=True):
-    """                                                                                                               
-    Principal component analysis                                                                                      
-    """
-    # Preprocessing the data                                                                                          
-    data -= np.mean(data,0)     # subtract the mean (centering the columns)                                           
-    if bias:
-        data /= np.sqrt(data.shape[0]) # biased covariance PCA                                                        
-    else:
-        data /= np.sqrt(data.shape[0]-1) # unbiased covariance PCA                                                    
-    if standardize_vars:
-        data /= np.linalg.norm(data, 0) # correlation PCA                                                             
-    # perform the SVD                                                                                                 
-    P,Delta,Qt = np.linalg.svd(data,full_matrices=False)
-    # flip eigenvectors' sign                                                                                         
-    if flip:
-        P,Qt = svd_flip(P,Qt,u_based_decision=False)
-
-    explained_variance = (Delta ** 2)
-    total_var = explained_variance.sum()
-    explained_variance_ratio = explained_variance / total_var
-
-    if n_components:
-        Qt = Qt[:n_components]
-        explained_variance_ratio = explained_variance_ratio[:n_components]
-    scores=np.dot(data,Qt.T)
-    return Qt.T,explained_variance_ratio,scores
-
-
-def savitzky_golay(y, window_size, order, deriv=0, rate=1):
-    
-    from math import factorial
-    
-    try:
-        window_size = np.abs(np.int(window_size))
-        order = np.abs(np.int(order))
-    except ValueError, msg:
-        raise ValueError("window_size and order have to be of type int")
-    if window_size % 2 != 1 or window_size < 1:
-        raise TypeError("window_size size must be a positive odd number")
-    if window_size < order + 2:
-        raise TypeError("window_size is too small for the polynomials order")
-    order_range = range(order+1)
-    half_window = (window_size -1) // 2
-    # precompute coefficients
-    b = np.mat([[k**i for i in order_range] for k in range(-half_window, half_window+1)])
-    m = np.linalg.pinv(b).A[deriv] * rate**deriv * factorial(deriv)
-    # pad the signal at the extremes with
-    # values taken from the signal itself
-    firstvals = y[0] - np.abs( y[1:half_window+1][::-1] - y[0] )
-    lastvals = y[-1] + np.abs(y[-half_window-1:-1][::-1] - y[-1])
-    y = np.concatenate((firstvals, y, lastvals))
-    return np.convolve( m[::-1], y, mode='valid')
+    return np.transpose(data), pca.components_
 
 
 def load_EAP_data(spike_folder, cell_names, all_categories,samples_per_cat=None):
@@ -197,329 +114,6 @@ def load_validation_data(validation_folder,load_mcat=False):
         print "Done loading spike data ..."
         return np.array(spikes), np.array(feat), np.array(locs), np.array(rots), np.array(cats)
 
-def load_vm_im(vm_im_folder, cell_names, all_categories):
-    
-    print "Loading membrane potential and currents data ..."
-    vmlist = [f for f in os.listdir(vm_im_folder) if f.startswith('v_spikes') and  any(x in f for x in cell_names)]
-    imlist = [f for f in os.listdir(vm_im_folder) if f.startswith('i_spikes') and  any(x in f for x in cell_names)]
-    print vmlist
-    cat_list = [f.split('_')[3] for f in vmlist]
-    entries_in_category = {cat: cat_list.count(cat) for cat in all_categories if cat in all_categories}
-    # print "Number of cells in each category", entries_in_category
-
-    vmlist = sorted(vmlist)
-    imlist = sorted(imlist)
-
-    vm_list = []
-    im_list = []
-    category_list = []
-
-    loaded_categories = []
-    ignored_categories = []
-
-    for idx, f in enumerate(vmlist):
-        category = f.split('_')[3]
-
-        if category in all_categories:
-            vm = np.load(join(vm_im_folder, f)) # [:spikes_per_cell, :, :]
-            vm_list.append(vm)
-            im = np.load(join(vm_im_folder, imlist[idx])) # [:spikes_per_cell, :]
-            im_list.append(im)
-            loaded_categories.append(category)
-        else:
-            ignored_categories.append(category)
-
-    print "Done loading spike data ..."
-    print "Loaded categories", loaded_categories
-    print "Ignored categories", ignored_categories
-    return np.array(vm_list), im_list, np.array(loaded_categories, dtype=str)
-
-
-
-def get_EAP_features(EAP,feat_list,dt=None,EAP_times=None,threshold_detect=5.,normalize=False):
-    ''' extract features specified in feat_list from EAP
-    '''
-    reference_mode = 't0'
-    if EAP_times is not None and dt is not None:
-        test_dt = (EAP_times[-1]-EAP_times[0])/(len(EAP_times)-1)
-        if dt != test_dt:
-            raise ValueError('EAP_times and dt do not match.')
-    elif EAP_times is not None:
-        dt = (EAP_times[-1]-EAP_times[0])/(len(EAP_times)-1)
-    elif dt is not None:
-        EAP_times = np.arange(EAP.shape[-1])*dt
-    else:
-        raise NotImplementedError('Please, specify either dt or EAP_times.')
-
-    if len(EAP.shape)==1:
-        EAP = np.reshape(EAP,[1,1,-1])
-    elif len(EAP.shape)==2:
-        EAP = np.reshape(EAP,[1,EAP.shape[0],EAP.shape[1]])
-    if len(EAP.shape)!= 3:
-        raise ValueError('Cannot handle EAPs with shape',EAP.shape)
-
-    if normalize:
-        signs = np.sign(np.min(EAP.reshape([EAP.shape[0],-1]),axis=1))
-        norm = np.abs(np.min(EAP.reshape([EAP.shape[0],-1]),axis=1))
-        EAP = np.array([EAP[i]/n if signs[i]>0 else EAP[i]/n-2. for i,n in enumerate(norm)])
-
-    features = {}
-    
-    amps = np.zeros((EAP.shape[0], EAP.shape[1]))
-    na_peak = np.zeros((EAP.shape[0], EAP.shape[1]))
-    rep_peak = np.zeros((EAP.shape[0], EAP.shape[1]))
-    if 'W' in feat_list:
-        features['widths'] = np.zeros((EAP.shape[0], EAP.shape[1]))
-    if 'F' in feat_list:
-        features['fwhm'] = np.zeros((EAP.shape[0], EAP.shape[1]))
-    if 'Aids' in feat_list:
-        features['Aids'] = np.zeros((EAP.shape[0], EAP.shape[1],2),dtype=int)
-    if 'Fids' in feat_list:
-        features['Fids'] = []
-    if 'FV' in feat_list:
-        features['fwhm_V'] = np.zeros((EAP.shape[0], EAP.shape[1]))
-    if 'Na' in feat_list:
-        features['na'] = np.zeros((EAP.shape[0], EAP.shape[1]))
-    if 'Rep' in feat_list:
-        features['rep'] = np.zeros((EAP.shape[0], EAP.shape[1]))
-
-
-    for i in range(EAP.shape[0]):
-        # For spike with positive peak preceding sodium trough
-        min_idx = np.array([np.unravel_index(EAP[i, e].argmin(), EAP[i, e].shape)[0] for e in
-                                       range(EAP.shape[1])])
-        na_peak[i, :] = np.array([EAP[i, e, min_idx[e]] for e in range(EAP.shape[1])])
-        
-        # max after NA trough
-        max_idx = np.array([np.unravel_index(EAP[i, e, min_idx[e]:].argmax(),
-                                                        EAP[i, e, min_idx[e]:].shape)[0]
-                                       + min_idx[e] for e in range(EAP.shape[1])])
-        rep_peak[i, :] = np.array([EAP[i, e, max_idx[e]] for e in range(EAP.shape[1])])
-
-        if 'Aids' in feat_list:
-            features['Aids'][i]=np.vstack((min_idx,max_idx)).T
-            
-        amps[i, :] = np.array([EAP[i, e, max_idx[e]]-EAP[i, e, min_idx[e]] for e in range(EAP.shape[1])])
-        # If below 'detectable threshold, set amp and width to 0
-        if normalize:
-            too_low = np.where(amps[i, :] < threshold_detect/norm[i])
-        else:
-            too_low = np.where(amps[i, :] < threshold_detect)
-        amps[i, too_low] = 0
-           
-        if 'W' in feat_list:
-            features['widths'][i, :] = np.abs(EAP_times[max_idx] - EAP_times[min_idx])
-            features['widths'][i, too_low] = EAP_times[-1]-EAP_times[0]
-        if 'F' in feat_list:
-            min_peak = np.min(EAP[i],axis=1)
-            if reference_mode == 't0':
-                # reference voltage is zeroth voltage entry
-                fwhm_ref = np.array([EAP[i,e,0] for e in range(EAP.shape[1])])
-            elif reference_mode == 'maxd2EAP':
-                # reference voltage is taken at peak onset
-                # peak onset is defined as id of maximum 2nd derivative of EAP
-                peak_onset = np.array([np.argmax(savitzky_golay(EAP[i,e],5,2,deriv=2)[:min_idx[e]])
-                                       for e in range(EAP.shape[1])])
-                fwhm_ref = np.array([EAP[i,e,peak_onset[e]] for e in range(EAP.shape[1])])
-            else:
-                raise NotImplementedError('Reference mode ' + reference_mode + ' for FWHM calculation not implemented.')
-            fwhm_V = (fwhm_ref + min_peak)/2. 
-            id_trough = [np.where(EAP[i,e]<fwhm_V[e])[0] for e in range(EAP.shape[1])]
-            if 'Fids' in feat_list:
-                features['Fids'].append(id_trough)
-            if 'FV' in feat_list:
-                features['fwhm_V'][i,:]= fwhm_V
-
-            # linear interpolation due to little number of data points during peak
-
-            # features['fwhm'][i,:] = np.array([(len(t)+1)*dt+(fwhm_V[e]-EAP[i,e,t[0]-1])/(EAP[i,e,t[0]]-EAP[i,e,t[0]-1])*dt -(fwhm_V[e]-EAP[i,e,t[-1]])/(EAP[i,e,min(t[-1]+1,EAP.shape[2]-1)]-EAP[i,e,t[-1]])*dt if len(t)>0 else np.infty for e,t in enumerate(id_trough)])
-
-            # no linear interpolation
-            features['fwhm'][i,:] = [(id_trough[e][-1] - id_trough[e][0])*dt if len(id_trough[e])>1 \
-                                     else EAP.shape[2] * dt for e in range(EAP.shape[1])]
-            features['fwhm'][i, too_low] = EAP_times[-1]-EAP_times[0]
-
-    if 'A' in feat_list:
-        features.update({'amps': amps})
-    if 'Na' in feat_list:
-        features.update({'na': na_peak})
-    if 'Rep' in feat_list:
-        features.update({'rep': rep_peak})
-
-    return features
-
-
-def compute_maxspike_amp_width(spikes):
-    
-    dt = 2**-5
-
-    widths = np.zeros(spikes.shape[0])
-    amps = np.zeros(spikes.shape[0])
-    fwhm = np.zeros(spikes.shape[0])
-
-    for i in range(spikes.shape[0]):
-        max_idx = spikes[i].argmax()
-        min_idx = spikes[i].argmin()
-        # For spike with positive peak preceding sodium trough
-        if min_idx < max_idx:
-            amps[i] = np.ptp(spikes[i])
-            widths[i] = (max_idx - min_idx) * dt
-        else:
-            max_idx = spikes[i, min_idx:].argmax() + min_idx
-            amps[i] = np.ptp(spikes[i, min_idx:-1])
-            widths[i] = (max_idx - min_idx) * dt
-
-        min_peak = np.min(spikes[i])
-        id_trough = np.where(spikes[i] < 0.5*min_peak)[0]
-        fwhm[i] = (id_trough[-1] - id_trough[0])*dt
-
-    return amps, widths, fwhm
-
-
-def get_binary_cat(categories, excit, inhib):
-    binary_cat = []
-    for i, cat in enumerate(categories):
-        if cat in excit:
-            binary_cat.append('EXCIT')
-        elif cat in inhib:
-            binary_cat.append('INHIB')
-
-    return np.array(binary_cat, dtype=str)
-
-def get_cat_from_label_idx(label_cat, categories):
-    cat = []
-    if len(label_cat) > 1:
-        for i, cc in enumerate(label_cat):
-            cat.append(categories[cc])
-    elif len(label_cat) == 1:
-        cat.append(categories[label_cat])
-
-    return cat
-
-def get_cat_from_hot_label(hot_label_cat, categories):
-    cat = []
-    if len(hot_label_cat.shape) == 2:
-        for i, cc in enumerate(hot_label_cat):
-            cat_id = int(np.where(cc == 1)[0])
-            cat.append(categories[cat_id])
-    elif len(hot_label_cat.shape) == 1:
-        cat_id = int(np.where(hot_label_cat == 1)[0])
-        cat.append(categories[cat_id])
-
-    return cat
-
-
-def convert_metype(mapfile,typ):
-    ''' convert an m/e-type specifying string to integer or vice versa
-    according to assignment in mapfile, or dictionary
-    '''
-    if type(filename)==str:
-        mapdict = dict(np.loadtxt(mapfile,dtype=str))
-    elif type(mapfile)==dict:
-        mapdict = mapfile
-    else:
-        raise TypeError('Cannot handle type of mapfile.')
-
-    if type(typ)==str and typ in mapdict.values():
-        return int(float(mapdict.keys()[mapdict.values().index(typ)]))
-    elif type(typ)==int:
-        return mapdict.get(str(typ))
-    else:
-        raise ValueError('Can\'t handle m/e-type of the cell.')
-
-
-###### STATISTICAL ANALYSIS #####
-
-def annotate_stat_plot(x, y, df, ax=None, sig_val=0.05, ast_val=[0.001, 0.01, 0.05], keys=None):
-    """
-    Performs pairwise statistical analysis on pandas df attibute y based on
-    factor x and annotate ax with statistical notes.
-    -- shapiro test
-    -- levene test
-    -- pairwise t-test or mann-whitney U test
-    Parameters
-    ----------
-    x, y : str
-           factor and attribute in pandas databas
-    df :  pandas dataframe
-          dataframe used to perform test
-    ax : matplotlib axis handles
-         axis to be annotated
-    Returns
-    -------
-    ax : annotated axis
-    """
-    import pandas as pd
-    import scipy.stats as st
-
-    group_by = df.groupby(x)
-    ngroups = group_by.ngroups
-    if keys is None:
-        keys = group_by[y].groups.keys()
-
-    pair_ttest = []
-    pair_mannwhit = []
-    pairs = []
-
-    for idx_i, cat_i in enumerate(keys):
-        for idx_j, cat_j in enumerate(keys):
-            if idx_j > idx_i:
-                # print idx_i, idx_j
-                eq_pval = st.levene(group_by[y].get_group(cat_i), group_by[y].get_group(cat_j))[1]
-                norm_pval_i = st.shapiro(group_by[y].get_group(cat_i))[1]
-                norm_pval_j = st.shapiro(group_by[y].get_group(cat_j))[1]
-                # print eq_pval, norm_pval_i, norm_pval_j
-                if eq_pval > sig_val and norm_pval_i > sig_val and norm_pval_j > sig_val:
-                    # print 'T-Test', idx_i, idx_j
-                    pair_ttest.append([idx_i, idx_j])
-                else:
-                    # print 'Mann-Whitney', idx_i, idx_j
-                    pair_mannwhit.append([idx_i, idx_j])
-
-    # Perform ttest
-    for pp_t in pair_ttest:
-        pval = st.ttest_ind(group_by[y].get_group(keys[pp_t[0]]), group_by[y].get_group(keys[pp_t[1]]))[1]
-        print 'pval t-test:  ', pval, np.mean(group_by[y].get_group(keys[pp_t[0]])), \
-            np.mean(group_by[y].get_group(keys[pp_t[1]]))
-        if pval < ast_val[0]:
-            pp_t.append('***')
-        elif pval < ast_val[1]:
-            pp_t.append('**')
-        elif pval < ast_val[2]:
-            pp_t.append('*')
-        else:
-            pp_t.append('ns')
-
-    # Perform mann-whitney
-    for pp_m in pair_mannwhit:
-        pval = st.mannwhitneyu(group_by[y].get_group(keys[pp_m[0]]), group_by[y].get_group(keys[pp_m[1]]))[1]
-        # pval = st.ttest_ind(group_by[y].get_group(keys[pp_m[0]]), group_by[y].get_group(keys[pp_m[1]]),
-        #                     equal_var=False)[1]
-
-        print 'pval mann-whit:  ', pval, np.mean(group_by[y].get_group(keys[pp_m[0]])), \
-            np.mean(group_by[y].get_group(keys[pp_m[1]]))
-        if pval < ast_val[0]:
-            pp_m.append('***')
-        elif pval < ast_val[1]:
-            pp_m.append('**')
-        elif pval < ast_val[2]:
-            pp_m.append('*')
-        else:
-            pp_m.append('ns')
-
-    pairs = pair_ttest + pair_mannwhit
-
-    # # annotate axis
-    # for pp in pairs:
-    #     # statistical annotation
-    #     x1, x2 = pp[0], pp[1]  # columns 'Sat' and 'Sun' (first column: 0, see plt.xticks())
-    #     print x1, x2
-    #     iqr = df[y].quantile(.75) - df[y].quantile(.25)
-    #     y_shift, h, col = df[y].min() - (x1*(len(keys)-(x1-1)) + x2) * 0.1*iqr, 0.05*iqr, 'k'
-    #     ax.plot([x1, x1, x2, x2], [y_shift, y_shift - h, y_shift - h, y_shift], lw=1.5, c=col)
-    #     ax.text((x1 + x2) * .5, y_shift - 3*h, pp[2], ha='center', va='bottom', color=col)
-
-    return pairs, keys
 
 
 ############ SPYICA ######################3
@@ -676,7 +270,7 @@ def cubic_padding(spike, pad_len, fs, percent_mean=0.2):
 
 
 
-def detect_and_align(sources, fs, recordings, t_start=None, t_stop=None, n_std=4, ref_period=2*pq.ms, upsample=8):
+def detect_and_align(sources, fs, recordings, t_start=None, t_stop=None, n_std=5, ref_period=2*pq.ms, upsample=8):
     '''
 
     Parameters
@@ -715,6 +309,7 @@ def detect_and_align(sources, fs, recordings, t_start=None, t_stop=None, n_std=4
         sp_wf = []
         sp_rec_wf = []
         sp_amp = []
+        first_spike = True
 
         for t in range(len(idx_spike) - 1):
             idx = idx_spike[t]
@@ -739,18 +334,30 @@ def detect_and_align(sources, fs, recordings, t_start=None, t_stop=None, n_std=4
                     spike_rec = recordings[:, idx - n_pad:]
                     spike_rec = np.pad(spike_rec, ((0, 0), (0, idx + n_pad - len(s))), 'constant')
 
+                if first_spike:
+                    nsamples = len(spike)
+                    nsamples_up = nsamples*upsample
+                    first_spike = False
+
                 # upsample and find minimume
                 spike_up = ss.resample_poly(spike, upsample, 1)
                 # times_up = ss.resample_poly(t_spike, upsample, 1)*unit
-                times_up = np.linspace(t_spike[0].magnitude, t_spike[-1].magnitude, num=len(spike_up)) * unit
+                t_spike_up = np.linspace(t_spike[0].magnitude, t_spike[-1].magnitude, num=len(spike_up)) * unit
 
                 min_idx_up = np.argmin(spike_up)
                 min_amp_up = np.min(spike_up)
-                min_time_up = times_up[min_idx_up]
+                min_time_up = t_spike_up[min_idx_up]
 
                 min_idx = np.argmin(spike)
                 min_amp = np.min(spike)
                 min_time = t_spike[min_idx]
+
+                # align waveform
+                shift = nsamples_up//2 - min_idx_up
+                if shift > 0:
+                    spike_up = np.pad(spike_up, (np.abs(shift), 0), 'constant')[:nsamples_up]
+                elif shift < 0:
+                    spike_up = np.pad(spike_up, (0, np.abs(shift)), 'constant')[-nsamples_up:]
 
                 if len(sp_times) != 0:
                     if min_time_up - sp_times[-1] > ref_period:
@@ -790,7 +397,18 @@ def detect_and_align(sources, fs, recordings, t_start=None, t_stop=None, n_std=4
 
 
 def reject_duplicate_spiketrains(sst, percent_threshold=0.8, min_spikes=3):
-    # spiketrains
+    '''
+
+    Parameters
+    ----------
+    sst
+    percent_threshold
+    min_spikes
+
+    Returns
+    -------
+
+    '''
     import neo
     spike_trains = []
     idx_sources = []
@@ -822,6 +440,7 @@ def reject_duplicate_spiketrains(sst, percent_threshold=0.8, min_spikes=3):
                     idx_sources.append(i)
     else:
         spike_trains = sst
+        idx_sources = range(len(sst))
 
     return spike_trains, idx_sources, duplicates
 
@@ -995,6 +614,21 @@ def bin_spiketimes(spike_times, fs=None, T=None, t_stop=None):
 
 
 def ISI_amplitude_modulation(st, mrand=1, sdrand=0.05, n_spikes=1, exp=0.5, mem_ISI = 10*pq.ms):
+    '''
+
+    Parameters
+    ----------
+    st
+    mrand
+    sdrand
+    n_spikes
+    exp
+    mem_ISI
+
+    Returns
+    -------
+
+    '''
 
     import elephant.statistics as stat
 
@@ -1043,8 +677,8 @@ def ISI_amplitude_modulation(st, mrand=1, sdrand=0.05, n_spikes=1, exp=0.5, mem_
 
     return amp_mod, cons
 
-def cluster_spike_amplitudes(spike_amps, sst, metric='cal', min_sihlo=0.8, min_cal=150, max_clusters=4,
-                             alg='kmeans', keep_all=False):
+def cluster_spike_amplitudes(sst, metric='cal', min_sihlo=0.8, min_cal=150, max_clusters=4,
+                             alg='kmeans', features='amp', ncomp=3, keep_all=False):
     '''
 
     Parameters
@@ -1065,11 +699,12 @@ def cluster_spike_amplitudes(spike_amps, sst, metric='cal', min_sihlo=0.8, min_c
     from sklearn.metrics import silhouette_score, calinski_harabaz_score
     from sklearn.cluster import KMeans
     from sklearn.mixture import GaussianMixture
-
     import neo
+    from copy import copy
 
+    spike_wf = np.array([sp.annotations['ica_wf'] for sp in sst])
+    spike_amps = [sp.annotations['ica_amp'] for sp in sst]
     nclusters = np.zeros(len(spike_amps))
-
     silhos = np.zeros(len(spike_amps))
     cal_hars = np.zeros(len(spike_amps))
 
@@ -1077,112 +712,256 @@ def cluster_spike_amplitudes(spike_amps, sst, metric='cal', min_sihlo=0.8, min_c
     reduced_sst = []
     keep_id = []
 
-    for i, amps in enumerate(spike_amps):
-        silho = 0
-        cal_har = 0
-        keep_going = True
+    if features == 'amp':
+        for i, amps in enumerate(spike_amps):
+            silho = 0
+            cal_har = 0
+            keep_going = True
 
-        if len(amps) > 2:
-            for k in range(2, max_clusters):
-                if alg=='kmeans':
-                    kmeans_new = KMeans(n_clusters=k, random_state=0)
-                    kmeans_new.fit(amps.reshape(-1, 1))
-                    labels = kmeans_new.predict(amps.reshape(-1, 1))
-                elif alg=='mog':
-                    gmm_new = GaussianMixture(n_components=k, covariance_type='full')
-                    gmm_new.fit(amps.reshape(-1, 1))
-                    labels = gmm_new.predict(amps.reshape(-1, 1))
+            if len(amps) > 2:
+                for k in range(2, max_clusters):
+                    if alg=='kmeans':
+                        kmeans_new = KMeans(n_clusters=k, random_state=0)
+                        kmeans_new.fit(amps.reshape(-1, 1))
+                        labels = kmeans_new.predict(amps.reshape(-1, 1))
+                    elif alg=='mog':
+                        gmm_new = GaussianMixture(n_components=k, covariance_type='full')
+                        gmm_new.fit(amps.reshape(-1, 1))
+                        labels = gmm_new.predict(amps.reshape(-1, 1))
 
-                if len(np.unique(labels)) > 1:
-                    silho_new = silhouette_score(amps.reshape(-1, 1), labels)
-                    cal_har_new = calinski_harabaz_score(amps.reshape(-1, 1), labels)
-                    if silho_new > silho:
-                        silho = silho_new
-                        if metric == 'silho':
-                            nclusters[i] = k
-                            if alg == 'kmeans':
-                                kmeans = kmeans_new
-                            elif alg == 'mog':
-                                gmm = gmm_new
-                            keep_going=False
-                    if cal_har_new > cal_har:
-                        cal_har = cal_har_new
-                        if metric == 'cal':
-                            nclusters[i] = k
-                            if alg == 'kmeans':
-                                kmeans = kmeans_new
-                            elif alg == 'mog':
-                                gmm = gmm_new
-                            keep_going=False
-                else:
-                    keep_going=False
-                    nclusters[i] = 1
-
-                if not keep_going:
-                    break
-
-            if nclusters[i] != 1:
-                if metric == 'silho':
-                    if silho < min_sihlo:
-                        nclusters[i] = 1
-                        reduced_sst.append(sst[i])
-                        reduced_amps.append(amps)
-                        keep_id.append(range(len(sst[i])))
+                    if len(np.unique(labels)) > 1:
+                        silho_new = silhouette_score(amps.reshape(-1, 1), labels)
+                        cal_har_new = calinski_harabaz_score(amps.reshape(-1, 1), labels)
+                        if silho_new > silho:
+                            silho = silho_new
+                            if metric == 'silho':
+                                nclusters[i] = k
+                                if alg == 'kmeans':
+                                    kmeans = kmeans_new
+                                elif alg == 'mog':
+                                    gmm = gmm_new
+                                keep_going=False
+                        if cal_har_new > cal_har:
+                            cal_har = cal_har_new
+                            if metric == 'cal':
+                                nclusters[i] = k
+                                if alg == 'kmeans':
+                                    kmeans = kmeans_new
+                                elif alg == 'mog':
+                                    gmm = gmm_new
+                                keep_going=False
                     else:
-                        if keep_all:
-                            for clust in np.unique(labels):
-                                idxs = np.where(labels == clust)[0]
-                                reduced_sst.append(sst[i][idxs])
-                                reduced_amps.append(amps[idxs])
-                                keep_id.append(idxs)
+                        keep_going=False
+                        nclusters[i] = 1
+
+                    if not keep_going:
+                        break
+
+                if nclusters[i] != 1:
+                    if metric == 'silho':
+                        if silho < min_sihlo:
+                            nclusters[i] = 1
+                            reduced_sst.append(sst[i])
+                            reduced_amps.append(amps)
+                            keep_id.append(range(len(sst[i])))
                         else:
-                            highest_clust = np.argmin(kmeans.cluster_centers_)
-                            highest_idx = np.where(labels==highest_clust)[0]
-                            reduced_sst.append(sst[i][highest_idx])
-                            reduced_amps.append(amps[highest_idx])
-                            keep_id.append(highest_idx)
-                elif metric == 'cal':
-                    if cal_har < min_cal:
-                        nclusters[i] = 1
-                        reduced_sst.append(sst[i])
-                        reduced_amps.append(amps)
-                        keep_id.append(range(len(sst[i])))
-                    else:
-                        if keep_all:
-                            for clust in np.unique(labels):
-                                idxs = np.where(labels == clust)[0]
-                                red_spikes = sst[i][idxs]
+                            if keep_all:
+                                for clust in np.unique(labels):
+                                    idxs = np.where(labels == clust)[0]
+                                    reduced_sst.append(sst[i][idxs])
+                                    reduced_amps.append(amps[idxs])
+                                    keep_id.append(idxs)
+                            else:
+                                highest_clust = np.argmin(kmeans.cluster_centers_)
+                                highest_idx = np.where(labels==highest_clust)[0]
+                                reduced_sst.append(sst[i][highest_idx])
+                                reduced_amps.append(amps[highest_idx])
+                                keep_id.append(highest_idx)
+                    elif metric == 'cal':
+                        if cal_har < min_cal:
+                            nclusters[i] = 1
+                            sst[i].annotate(ica_source=i)
+                            reduced_sst.append(sst[i])
+                            reduced_amps.append(amps)
+                            keep_id.append(range(len(sst[i])))
+                        else:
+                            if keep_all:
+                                for clust in np.unique(labels):
+                                    idxs = np.where(labels == clust)[0]
+                                    red_spikes = sst[i][idxs].copy()
+                                    if 'ica_amp' in red_spikes.annotations:
+                                        red_spikes.annotate(ica_amp=red_spikes.annotations['ica_amp'])
+                                    if 'ica_wf' in red_spikes.annotations:
+                                        red_spikes.annotate(ica_wf=red_spikes.annotations['ica_wf'])
+                                    red_spikes.annotate(ica_source=i)
+                                    reduced_sst.append(red_spikes)
+                                    reduced_amps.append(amps[idxs])
+                                    keep_id.append(idxs)
+                            else:
+                                if alg=='kmeans':
+                                    highest_clust = np.argmin(kmeans.cluster_centers_)
+                                elif alg == 'mog':
+                                    highest_clust = np.argmin(gmm.means_)
+                                highest_idx = np.where(labels==highest_clust)[0]
+                                red_spikes = sst[i][highest_idx].copy()
                                 if 'ica_amp' in red_spikes.annotations:
                                     red_spikes.annotate(ica_amp=red_spikes.annotations['ica_amp'])
                                 if 'ica_wf' in red_spikes.annotations:
                                     red_spikes.annotate(ica_wf=red_spikes.annotations['ica_wf'])
+                                red_spikes.annotate(ica_source=i)
                                 reduced_sst.append(red_spikes)
-                                reduced_amps.append(amps[idxs])
-                                keep_id.append(idxs)
-                        else:
-                            if alg=='kmeans':
-                                highest_clust = np.argmin(kmeans.cluster_centers_)
-                            elif alg == 'mog':
-                                highest_clust = np.argmin(gmm.means_)
-                            highest_idx = np.where(labels==highest_clust)[0]
-                            red_spikes = sst[i][highest_idx]
-                            if 'ica_amp' in red_spikes.annotations:
-                                red_spikes.annotate(ica_amp=red_spikes.annotations['ica_amp'])
-                            if 'ica_wf' in red_spikes.annotations:
-                                red_spikes.annotate(ica_wf=red_spikes.annotations['ica_wf'])
-                            reduced_sst.append(red_spikes)
-                            reduced_amps.append(amps[highest_idx])
-                            keep_id.append(highest_idx)
-                silhos[i] = silho
-                cal_hars[i] = cal_har
+                                reduced_amps.append(amps[highest_idx])
+                                keep_id.append(highest_idx)
+                    silhos[i] = silho
+                    cal_hars[i] = cal_har
+                else:
+                    sst[i].annotate(ica_source=i)
+                    reduced_sst.append(sst[i].copy())
+                    reduced_amps.append(amps)
+                    keep_id.append(range(len(sst[i])))
             else:
-                reduced_sst.append(sst[i])
+                reduced_sst.append(sst[i].copy())
                 reduced_amps.append(amps)
                 keep_id.append(range(len(sst[i])))
-        else:
-            reduced_sst.append(sst[i])
-            reduced_amps.append(amps)
-            keep_id.append(range(len(sst[i])))
+
+    elif features == 'pca':
+        for i, wf in enumerate(spike_wf):
+            # apply pca on ica_wf
+            wf_pca, comp = apply_pca(wf.T, n_comp=ncomp)
+            wf_pca = wf_pca.T
+            amps = spike_amps[i]
+
+            silho = 0
+            cal_har = 0
+            keep_going = True
+
+            if len(wf_pca) > 2:
+                for k in range(2, max_clusters):
+                    if alg == 'kmeans':
+                        kmeans_new = KMeans(n_clusters=k, random_state=0)
+                        kmeans_new.fit(wf_pca)
+                        labels = kmeans_new.predict(wf_pca)
+                    elif alg == 'mog':
+                        gmm_new = GaussianMixture(n_components=k, covariance_type='full')
+                        gmm_new.fit(wf_pca)
+                        labels = gmm_new.predict(wf_pca)
+
+                    if len(np.unique(labels)) > 1:
+                        silho_new = silhouette_score(wf_pca, labels)
+                        cal_har_new = calinski_harabaz_score(wf_pca, labels)
+                        if silho_new > silho:
+                            silho = silho_new
+                            if metric == 'silho':
+                                nclusters[i] = k
+                                if alg == 'kmeans':
+                                    kmeans = kmeans_new
+                                elif alg == 'mog':
+                                    gmm = gmm_new
+                                keep_going = False
+                        if cal_har_new > cal_har:
+                            cal_har = cal_har_new
+                            if metric == 'cal':
+                                nclusters[i] = k
+                                if alg == 'kmeans':
+                                    kmeans = kmeans_new
+                                elif alg == 'mog':
+                                    gmm = gmm_new
+                                keep_going = False
+                    else:
+                        keep_going = False
+                        nclusters[i] = 1
+
+                    if not keep_going:
+                        break
+
+                if nclusters[i] != 1:
+                    if metric == 'silho':
+                        if silho < min_sihlo:
+                            nclusters[i] = 1
+                            red_spikes = sst[i]
+                            red_spikes.annotations = copy(sst[i].annotations)
+                            red_spikes.annotate(ica_source=i)
+                            reduced_sst.append(red_spikes)
+                            reduced_amps.append(amps)
+                            keep_id.append(range(len(sst[i])))
+                        else:
+                            if keep_all:
+                                for clust in np.unique(labels):
+                                    idxs = np.where(labels == clust)[0]
+                                    red_spikes = sst[i][idxs]
+                                    red_spikes.annotations = copy(sst[i].annotations)
+                                    if 'ica_amp' in red_spikes.annotations:
+                                        red_spikes.annotate(ica_amp=red_spikes.annotations['ica_amp'][idxs])
+                                    if 'ica_wf' in red_spikes.annotations:
+                                        red_spikes.annotate(ica_wf=red_spikes.annotations['ica_wf'][idxs])
+                                    red_spikes.annotate(ica_source=i)
+                                    reduced_amps.append(amps[idxs])
+                                    keep_id.append(idxs)
+                            else:
+                                highest_clust = np.argmin(kmeans.cluster_centers_)
+                                idxs = np.where(labels == highest_clust)[0]
+                                red_spikes.annotations = copy(sst[i].annotations)
+                                if 'ica_amp' in red_spikes.annotations:
+                                    red_spikes.annotate(ica_amp=red_spikes.annotations['ica_amp'][idxs])
+                                if 'ica_wf' in red_spikes.annotations:
+                                    red_spikes.annotate(ica_wf=red_spikes.annotations['ica_wf'][idxs])
+                                red_spikes.annotate(ica_source=i)
+                                reduced_amps.append(amps[highest_idx])
+                                keep_id.append(highest_idx)
+                    elif metric == 'cal':
+                        if cal_har < min_cal:
+                            nclusters[i] = 1
+                            red_spikes = copy(sst[i])
+                            red_spikes.annotations = copy(sst[i].annotations)
+                            red_spikes.annotate(ica_source=i)
+                            reduced_sst.append(red_spikes)
+                            reduced_amps.append(amps)
+                            keep_id.append(range(len(sst[i])))
+                        else:
+                            if keep_all:
+                                for clust in np.unique(labels):
+                                    idxs = np.where(labels == clust)[0]
+                                    red_spikes = sst[i][idxs]
+                                    red_spikes.annotations = copy(sst[i].annotations)
+                                    if 'ica_amp' in red_spikes.annotations:
+                                        red_spikes.annotate(ica_amp=red_spikes.annotations['ica_amp'][idxs])
+                                    if 'ica_wf' in red_spikes.annotations:
+                                        red_spikes.annotate(ica_wf=red_spikes.annotations['ica_wf'][idxs])
+                                    red_spikes.annotate(ica_source=i)
+                                    reduced_sst.append(red_spikes)
+                                    reduced_amps.append(amps[idxs])
+                                    keep_id.append(idxs)
+                            else:
+                                if alg == 'kmeans':
+                                    highest_clust = np.argmin(kmeans.cluster_centers_)
+                                elif alg == 'mog':
+                                    highest_clust = np.argmin(gmm.means_)
+                                idxs = np.where(labels == highest_clust)[0]
+                                red_spikes.annotations = copy(sst[i].annotations)
+                                if 'ica_amp' in red_spikes.annotations:
+                                    red_spikes.annotate(ica_amp=red_spikes.annotations['ica_amp'][idxs])
+                                if 'ica_wf' in red_spikes.annotations:
+                                    red_spikes.annotate(ica_wf=red_spikes.annotations['ica_wf'][idxs])
+                                red_spikes.annotate(ica_source=i)
+                                reduced_sst.append(red_spikes)
+                                reduced_amps.append(amps[highest_idx])
+                                keep_id.append(highest_idx)
+                    silhos[i] = silho
+                    cal_hars[i] = cal_har
+                else:
+                    red_spikes = copy(sst[i])
+                    red_spikes.annotations = copy(sst[i].annotations)
+                    red_spikes.annotate(ica_source=i)
+                    reduced_sst.append(red_spikes)
+                    reduced_amps.append(amps)
+                    keep_id.append(range(len(sst[i])))
+            else:
+                red_spikes = copy(sst[i])
+                red_spikes.annotations = copy(sst[i].annotations)
+                red_spikes.annotate(ica_source=i)
+                reduced_sst.append(red_spikes)
+                reduced_amps.append(amps)
+                keep_id.append(range(len(sst[i])))
 
     if metric == 'silho':
         score = silhos
@@ -1330,10 +1109,10 @@ def evaluate_spiketrains(gtst, sst, t_jitt = 1*pq.ms, overlapping=False, paralle
     # Evaluate
 
     # mark all spikes as unpaired
-    for gt in gtst:
+    for i, gt in enumerate(gtst):
         lab_gt = np.array(['UNPAIRED'] * len(gt))
-        gt.annotate(labels=lab_gt)
-    for st in sst:
+        gtst[i].annotate(labels=lab_gt)
+    for i, st in enumerate(sst):
         lab_st = np.array(['UNPAIRED'] * len(st))
         st.annotate(labels=lab_st)
 
@@ -1342,11 +1121,11 @@ def evaluate_spiketrains(gtst, sst, t_jitt = 1*pq.ms, overlapping=False, paralle
     for gt_i, gt in enumerate(gtst):
         if put_pairs[gt_i, 0] != -1:
             lab_gt = gt.annotations['labels']
-            st = sst[put_pairs[gt_i, 1]]
-            lab_st = st.annotations['labels']
+            st_sel = sst[put_pairs[gt_i, 1]]
+            lab_st = sst[put_pairs[gt_i, 1]].annotations['labels']
             # from gtst: TP, TPO, TPSO, FN, FNO, FNSO
             for sp_i, t_sp in enumerate(gt):
-                id_sp = np.where((st > t_sp - t_jitt) & (st < t_sp + t_jitt))[0]
+                id_sp = np.where((st_sel > t_sp - t_jitt) & (st_sel < t_sp + t_jitt))[0]
                 if len(id_sp) == 1:
                     if 'overlap' in gt.annotations.keys():
                         if gt.annotations['overlap'][sp_i] == 'NO':
@@ -1361,7 +1140,7 @@ def evaluate_spiketrains(gtst, sst, t_jitt = 1*pq.ms, overlapping=False, paralle
                     else:
                         lab_gt[sp_i] = 'TP'
                         lab_st[id_sp] = 'TP'
-            st.annotate(labels=lab_st)
+            sst[put_pairs[gt_i, 1]].annotate(labels=lab_st)
         else:
             lab_gt = np.array(['FN'] * len(gt))
         gt.annotate(labels=lab_gt)
@@ -1724,6 +1503,19 @@ def export_prb_file(n_elec, electrode_name, pathname,
             f.write('}\n')
 
     return full_filename
+
+
+def extract_adjacency(pos, adj_dist):
+    if pos is not None and adj_dist is not None:
+        adj_graph = []
+        for el1, el_pos1 in enumerate(pos):
+            adjacent_electrodes = []
+            for el2, el_pos2 in enumerate(pos):
+                if el1 != el2:
+                    if np.linalg.norm(el_pos1 - el_pos2) < adj_dist:
+                        adjacent_electrodes.append(el2)
+            adj_graph.append(adjacent_electrodes)
+    return adj_graph
 
 
 def calc_MI(x, y, bins):

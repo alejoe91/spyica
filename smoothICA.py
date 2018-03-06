@@ -49,7 +49,7 @@ def bi_norm(x, m1, m2, s1, s2, k1, k2):
     return ret
 
 
-def smoothICA(X, n_comp='all', L=1, lamb=0, mu=0, n_iter=1000, EM=False):
+def smoothICA(X, n_comp='all', white_w=False, L=1, lamb=0, mu=0, n_iter=2000, EM=False):
     '''
 
     Parameters
@@ -76,8 +76,8 @@ def smoothICA(X, n_comp='all', L=1, lamb=0, mu=0, n_iter=1000, EM=False):
     # whiten data
     data, pc = whiten(X, n_comp)
 
-    learning_rate = 1e2
-    display_step = 20
+    learning_rate = 1e3
+    display_step = 1
 
     seed=np.random.seed(2308)
     # Launch the raph
@@ -110,35 +110,25 @@ def smoothICA(X, n_comp='all', L=1, lamb=0, mu=0, n_iter=1000, EM=False):
         W = weight_variable((n_comp, n_features), name='demixing', seed=seed)
         I = tf.constant(np.eye(n_comp, n_features), dtype=np.float32)
 
-        y = tf.matmul(W, Z)
-        a = tf.constant(4.)
+        # whitening
+        e, v = tf.linalg.eigh(W)
+        epsilon = 1E-3
+        e_inv = tf.diag(1./my_pow(e+epsilon, 0.5))
+        W_w = tf.matmul(tf.matmul(tf.matmul(v, e_inv), v, transpose_b=True), W)
+        # pseudo-whitening
+        mean, var = tf.nn.moments(W, axes=[1])
+        W_pw = tf.divide(tf.subtract(W, mean), tf.sqrt(var))
+        # s, u, v = tf.svd(W)
 
-        # todo approximate pdf with sum of gaussians and then compute cdf
-        # term_1 = 0.5*(3 + k1*tf.erf((y - m1)/(np.sqrt(2)*s1))
-        #               + k2*tf.erf((y - m2)/(np.sqrt(2)*s2))
-        #               + k3*tf.erf((y - m3)/(np.sqrt(2)*s3)))
+        if not white_w:
+            y = tf.matmul(W, Z)
+        else:
+            y = tf.matmul(W_pw, Z)
 
-        def exp_X2_taylor(X):
-            return 1 - tf.pow(X, 2) + 0.5*tf.pow(X, 4)
-
-        # term_1 = tf.divide(-2*(1./s1 * (y - m1) * tf.exp(-(y - m1)/(2*(s1**2)))
-        #                        + 1./s2 * (y - m2) * tf.exp(-(y - m2)/(2*(s1**2)))
-        #                        + 1./s3 * (y - m3) * tf.exp(-(y - m3)/(2*(s3**2)))),
-        #                    ((1./s1 * tf.exp(-(y - m1)/(2*(s1**2)))
-        #                        + 1./s2 * tf.exp(-(y - m2)/(2*(s1**2)))
-        #                        + 1./s3 * tf.exp(-(y - m3)/(2*(s3**2))))))
-
-        # term_1 = tf.divide(-2*(1./s1 * (y - m1) * exp_X2_taylor((y - m1)/(2*(s1**2)))
-        #                        + 1./s2 * (y - m2) * exp_X2_taylor((y - m2)/(2*(s1**2)))
-        #                        + 1./s3 * (y - m3) * exp_X2_taylor((y - m3)/(2*(s3**2)))),
-        #                    ((1./s1 * exp_X2_taylor((y - m1)/(2*(s1**2)))
-        #                        + 1./s2 * exp_X2_taylor((y - m2)/(2*(s1**2)))
-        #                        + 1./s3 * exp_X2_taylor((y - m3)/(2*(s3**2))))))
-
-        term_1 = tf.pow(y,3)
-        term_2 = tf.atan(y)
-        # term_2 = y
-        # term_2 = 2*tf.tanh(y)
+        # term_1 = tf.pow(y,3)
+        # term_2 = tf.tanh(y)
+        term_1 = y
+        term_2 = 2*tf.tanh(y)
 
         nonlin = tf.matmul(term_1, term_2, transpose_b=True)
         nonlin = tf.divide(nonlin, n_obs)
@@ -150,16 +140,26 @@ def smoothICA(X, n_comp='all', L=1, lamb=0, mu=0, n_iter=1000, EM=False):
         sess.run(tf.global_variables_initializer())
         sess.as_default()
 
+        # raise Exception()
+
         ############
         # TRAINING #
         ############
         t_start = time.time()
+        epoch=-1
+        train_err = sess.run(err, feed_dict={Z: data})
+        print "Step:", '%04d' % (epoch + 1), "Cost=", "{:.9f}".format(train_err)
+        print 'Elapsed time: ', time.time() - t_start
+
+
         for epoch in range(n_iter):
             idxs = np.random.permutation(n_obs)[:batch_size]
             train_batch = data[:, idxs]
+            # raise Exception()
             sess.run(train_step, feed_dict={Z: train_batch})
             # Display logs per epoch step
             if (epoch + 1) % display_step == 0:
+                # raise Exception()
                 train_err = sess.run(err, feed_dict={Z: train_batch})
                 print "Step:", '%04d' % (epoch + 1), "Cost=", "{:.9f}".format(train_err)
                 print 'Elapsed time: ', time.time() - t_start
@@ -175,3 +175,43 @@ def smoothICA(X, n_comp='all', L=1, lamb=0, mu=0, n_iter=1000, EM=False):
         A_opt = []
 
     return y_opt, A_opt, W_opt, nonlin_mat, data
+
+
+if __name__ == '__main__':
+
+    recordings = np.load('/home/alessio/Documents/Codes/SpyICA/recordings/convolution/recording_physrot'
+                             '_Neuronexus-32-cut-30_10_2.0s_uncorrelated_10.0_5.0Hz_15.0Hz_modulation_all_'
+                             '08-02-2018:18:08_2904/recordings.npy')
+
+    y_opt, A_opt, W_opt, nonlin_mat, whiten = smoothICA(recordings, white_w=False)
+
+    plt.figure()
+    plt.plot(np.transpose(y_opt))
+
+    fig = plt.figure()
+    ax1 = fig.add_subplot(1,2,1)
+    ax2 = fig.add_subplot(1,2,2)
+
+    ax1.matshow(nonlin_mat[0])
+    ax2.matshow(nonlin_mat[-1])
+
+    plt.ion()
+    plt.show()
+
+# # todo approximate pdf with sum of gaussians and then compute cdf
+# def exp_X2_taylor(X):
+#     return 1 - tf.pow(X, 2) + 0.5*tf.pow(X, 4)
+#
+# # term_1 = tf.divide(-2*(1./s1 * (y - m1) * tf.exp(-(y - m1)/(2*(s1**2)))
+# #                        + 1./s2 * (y - m2) * tf.exp(-(y - m2)/(2*(s1**2)))
+# #                        + 1./s3 * (y - m3) * tf.exp(-(y - m3)/(2*(s3**2)))),
+# #                    ((1./s1 * tf.exp(-(y - m1)/(2*(s1**2)))
+# #                        + 1./s2 * tf.exp(-(y - m2)/(2*(s1**2)))
+# #                        + 1./s3 * tf.exp(-(y - m3)/(2*(s3**2))))))
+#
+# # term_1 = tf.divide(-2*(1./s1 * (y - m1) * exp_X2_taylor((y - m1)/(2*(s1**2)))
+# #                        + 1./s2 * (y - m2) * exp_X2_taylor((y - m2)/(2*(s1**2)))
+# #                        + 1./s3 * (y - m3) * exp_X2_taylor((y - m3)/(2*(s3**2)))),
+# #                    ((1./s1 * exp_X2_taylor((y - m1)/(2*(s1**2)))
+# #                        + 1./s2 * exp_X2_taylor((y - m2)/(2*(s1**2)))
+# #                        + 1./s3 * exp_X2_taylor((y - m3)/(2*(s3**2))))))

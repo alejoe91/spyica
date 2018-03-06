@@ -5,7 +5,6 @@
 import numpy as np
 from sklearn.decomposition import FastICA
 
-#TODO chunks to increase speed
 def instICA(X, n_comp='all', n_chunks=1, chunk_size=None):
     """Performs instantaneous ICA.
 
