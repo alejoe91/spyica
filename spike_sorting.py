@@ -11,21 +11,17 @@ import neo
 import elephant
 import scipy.signal as ss
 import scipy.stats as stats
-# import quantities as pq
+import quantities as pq
 import json
 import yaml
 import time
 import h5py
 
-# import spiketrain_generator as stg
 from tools import *
 from neuroplot import *
 import ICA as ica
 import smoothICA as sICA
 import orICA
-# from sfa.incsfa import IncSFANode
-# from sfa.trainer import TrainerNode
-# import sfa.incsfa as sfa
 
 root_folder = os.getcwd()
 

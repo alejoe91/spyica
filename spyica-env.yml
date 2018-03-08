@@ -1,0 +1,16 @@
+name: spyica
+dependencies:
+  - python=2.7
+  - numpy
+  - matplotlib
+  - scipy
+  - h5py
+  - cython
+  - pandas
+  - seaborn
+  - pyyaml
+  - multiprocessing
+  - pip:
+        - neo
+        - elephant
+        - quantities
