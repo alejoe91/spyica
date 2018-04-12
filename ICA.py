@@ -1,6 +1,4 @@
-'''
-
-'''
+from __future__ import print_function
 
 import numpy as np
 from sklearn.decomposition import FastICA
@@ -44,12 +42,12 @@ def instICA(X, n_comp='all', n_chunks=1, chunk_size=None):
                         if c_init > prev_c and c_init < c_init + chunk_size:
                             proceed = False
                             i += 1
-                            print 'failed ', i
+                            print('failed ', i)
 
                 idxs.extend(range(c_init, c_init + chunk_size))
 
             X_reduced = X[:, idxs]
-            print X_reduced.shape
+            print(X_reduced.shape)
     else:
         X_reduced = X
 
@@ -344,10 +342,80 @@ def gfICAweights(weight, mea_dim=None, mode='time', cmap='viridis', style='mat',
         else:
                 raise AttributeError('Gradient flow mode is unknown!')
 
-
-
-
-
     return axes, images
 
 
+if __name__ == '__main__':
+    import time
+    import sys, os
+    from os.path import join
+    from scipy import stats
+    import MEAutility as MEA
+    from tools import *
+    import yaml
+    from spike_sorting import plot_mixing
+
+    if len(sys.argv) == 1:
+        folder = '/home/alessio/Documents/Codes/SpyICA/recordings/convolution/recording_physrot_Neuronexus-32-cut-30_' \
+                 '10_10.0s_uncorrelated_10.0_5.0Hz_15.0Hz_modulated_24-01-2018_22_00'
+        filename = join(folder, 'kilosort/raw.dat')
+        recordings = np.fromfile(filename, dtype='int16') \
+            .reshape(-1, 30).transpose()
+
+        rec_info = [f for f in os.listdir(folder) if '.yaml' in f or '.yml' in f][0]
+        with open(join(folder, rec_info), 'r') as f:
+            info = yaml.load(f)
+
+        electrode_name = info['General']['electrode name']
+        mea_pos, mea_dim, mea_pitch = MEA.return_mea(electrode_name)
+
+        templates = np.load(join(folder, 'templates.npy'))
+    else:
+        folder = sys.argv[1]
+        recordings = np.load(join(folder, 'recordings.npy')).astype('int16')
+        rec_info = [f for f in os.listdir(folder) if '.yaml' in f or '.yml' in f][0]
+        with open(join(folder, rec_info), 'r') as f:
+            info = yaml.load(f)
+
+        electrode_name = info['General']['electrode name']
+        mea_pos, mea_dim, mea_pitch = MEA.return_mea(electrode_name)
+
+        templates = np.load(join(folder, 'templates.npy'))
+
+    adj_graph = extract_adjacency(mea_pos, np.max(mea_pitch) + 5)
+
+    t_start = time.time()
+    y, a, w = instICA(recordings)
+    print('Elapsed time: ', time.time() - t_start)
+
+    skew_thresh = 0.1
+    sk = stats.skew(y, axis=1)
+    high_sk = np.where(np.abs(sk) >= skew_thresh)
+
+    ku_thresh = 1.5
+    ku = stats.kurtosis(y, axis=1)
+    high_ku = np.where(np.abs(ku) >= ku_thresh)
+
+    # Smoothness
+    a /= np.max(a)
+    smooth = np.zeros(a.shape[0])
+    for i in range(len(smooth)):
+        smooth[i] = (np.mean([1. / len(adj) * np.sum(a[i, j] - a[i, adj]) ** 2
+                              for j, adj in enumerate(adj_graph)]))
+
+    print('High skewness: ', np.abs(sk[high_sk]))
+    print('Average high skewness: ', np.mean(np.abs(sk[high_sk])))
+    print('Number high skewness: ', len(sk[high_sk]))
+
+    print('High kurtosis: ', ku[high_ku])
+    print('Average high kurtosis: ', np.mean(ku[high_ku]))
+    print('Number high kurtosis: ', len(ku[high_ku]))
+
+    print('Smoothing: ', smooth[high_sk])
+    print('Average smoothing: ', np.mean(smooth[high_sk]))
+
+    f = plot_mixing(a[high_sk], mea_pos, mea_dim)
+    f.suptitle('fastICA')
+    plt.figure();
+    plt.plot(y[high_sk].T)
+    plt.title('fastICA')

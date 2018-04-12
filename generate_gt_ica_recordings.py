@@ -16,6 +16,7 @@ import yaml
 import time
 import multiprocessing
 from copy import copy
+from spike_sorting import plot_mixing, plot_templates, templates_weights
 
 import spiketrain_generator as stg
 from tools import *
@@ -119,6 +120,49 @@ class GenST:
             plot_mea_recording(templates[0], self.mea_pos, self.mea_dim, colors='r')
 
 
+        # Select maximum and create new template with known mixing matrix
+        y_bounds = [np.min(self.mea_pos[:, 1]), np.max(self.mea_pos[:, 1])]
+        z_bounds = [np.min(self.mea_pos[:, 2]), np.max(self.mea_pos[:, 2])]
+        sd_bound = [50, 400]
+        csd_bound = [-80, 80]
+        pos_yz = self.mea_pos[:, 1:]
+
+        mixing = []
+        templates_mix = []
+        pos_mu = []
+
+        for t, temp in enumerate(templates):
+            max_temp_idx = np.unravel_index(np.argmin((temp)), temp.shape)[0]
+            mu = np.array([np.random.randint(y_bounds[0], y_bounds[1]), np.random.randint(z_bounds[0], z_bounds[1])])
+            csd = np.random.randint(csd_bound[0], csd_bound[1])
+            # csd = 0
+            sd = np.array([[np.random.randint(sd_bound[0], sd_bound[1]), csd],
+                           [csd, np.random.randint(sd_bound[0], sd_bound[1])]])
+            print 'mu ', mu
+            print 'SD ', sd
+
+            sd_1 = np.linalg.inv(sd)
+
+            mix = 1./np.sqrt((2*np.pi**2) * np.linalg.norm(sd)) * np.squeeze([np.exp(-0.5 * np.matmul(np.matmul((pos - mu)[:, np.newaxis].T, sd_1), (pos - mu)[:, np.newaxis]))
+                   for pos in pos_yz])
+
+            pos_mu.append([(pos-mu) for pos in pos_yz])
+            mix = mix / np.max(np.abs(mix))
+            new_temp = np.matmul(mix[:, np.newaxis], temp[max_temp_idx][np.newaxis, :])
+
+            mixing.append(mix)
+            templates_mix.append(new_temp)
+
+        mixing = np.array(mixing)
+        templates_mix = np.array(templates_mix)
+
+        self.mixing = mixing
+        templates = templates_mix
+
+        if self.plot_figures:
+            plot_mixing(mixing, self.mea_pos, self.mea_dim)
+            plot_templates(templates_mix, self.mea_pos, self.mea_pitch)
+
         up = self.fs
         down = spike_fs
         sampling_ratio = float(up/down)
@@ -176,6 +220,8 @@ class GenST:
         self.templates = np.array(templates_jitter)
         self.splines = np.array(templates_spl)
 
+        plot_templates(self.templates, self.mea_pos, self.mea_pitch)
+
         if self.plot_figures:
             plot_mea_recording(self.templates[0], self.mea_pos, self.mea_dim)
 
@@ -209,11 +255,12 @@ class GenST:
         #             st = bursting_st(freq=st.annotations['freq'])
 
         # find SNR and annotate
+        print 'SNR'
         for t_i, temp in enumerate(self.templates):
             min_peak = np.min(temp)
             snr = np.abs(min_peak/float(noiselev))
             self.spgen.all_spiketrains[t_i].annotate(snr=snr)
-            print min_peak, snr
+            print snr
 
 
         if self.plot_figures:
@@ -242,14 +289,14 @@ class GenST:
                 self.amp_mod.append(amp)
                 self.cons_spikes.append(cons)
         elif self.spike_modulation == 'noise':
-            print 'Noisy modulation'
+            print 'Noisy modulation at template level'
             for st in self.spgen.all_spiketrains:
                 amp, cons = ISI_amplitude_modulation(st, mrand=self.mrand, sdrand=self.sdrand,
                                                      n_spikes=0, exp=self.exp, mem_ISI=self.mem_isi)
                 self.amp_mod.append(amp)
                 self.cons_spikes.append(cons)
         elif self.spike_modulation == 'noise-all':
-            print 'Noisy modulation on all electrodes separately'
+            print 'Noisy modulation at electrode level'
             for st in self.spgen.all_spiketrains:
                 amp, cons = ISI_amplitude_modulation(st, n_el=n_elec, mrand=self.mrand, sdrand=self.sdrand,
                                                      n_spikes=0, exp=self.exp, mem_ISI=self.mem_isi)
@@ -378,7 +425,7 @@ class GenST:
 
     def save_spikes(self):
         ''' save meta data in old fashioned format'''
-        self.rec_name = 'recording_' + self.rotation_type + '_' + self.electrode_name + '_' + str(self.n_cells) \
+        self.rec_name = 'recording_ica_' + self.rotation_type + '_' + self.electrode_name + '_' + str(self.n_cells) \
                         + '_' + str(self.duration).replace(' ','') + '_' + self.noise_mode + '_' \
                         + str(self.noise_level) + '_' + str(self.f_exc).replace(' ','') + '_' \
                         + str(self.f_inh).replace(' ','') + '_modulation_' + self.spike_modulation \
@@ -437,6 +484,7 @@ class GenST:
         np.save(join(self.rec_path,'recordings'), self.recordings)
         np.save(join(self.rec_path,'spiketrains'), self.spgen.all_spiketrains)
         np.save(join(self.rec_path,'templates'), self.templates)
+        np.save(join(self.rec_path,'mixing'), self.mixing)
         np.save(join(self.rec_path,'templates_loc'), self.templates_loc)
         np.save(join(self.rec_path,'templates_cat'), self.templates_cat)
         np.save(join(self.rec_path,'templates_bincat'), self.templates_cat)
@@ -660,7 +708,7 @@ if __name__ == '__main__':
         pos = sys.argv.index('-seed')
         seed = int(sys.argv[pos + 1])
     else:
-        seed = 2904
+        seed = np.random.randint(0, 10000)
 
     print modulation
 

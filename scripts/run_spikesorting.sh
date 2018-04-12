@@ -3,7 +3,7 @@
 sorters='ica klusta kilosort mountainsort spykingcircus yass'
 
 if [ $# == 0 ]; then
-    echo "Supply recording path (list) or recording_folder, ncells, noise, dur, probe, seed, and spikesorters ('list') or recording_folder 'all'"
+    echo "Supply recording path (list) or recording_folder, ncells, noise, dur, probe, seed, and spikesorters ('list') or recording_folder 'all' (run from Spyica root folder)"
 else
     if [ $# == 2 ] && [ "$2" == "all" ]; then
         echo "Spikesorting all recordings"
@@ -13,7 +13,7 @@ else
             echo "Spikesorting $rec"
             for ss in $sorters
                 do
-                python ../spike_sorting.py -r $rec -mod $ss -noplot
+                python spike_sorting.py -r $rec -mod $ss -noplot
                 done
             done
     elif [ $# == 2 ]; then
@@ -41,7 +41,7 @@ else
                     echo "Spikesorting $rec"
                     for ss in $sorters
                         do
-                        python ../spike_sorting.py -r $rec -mod $ss -noplot
+                        python spike_sorting.py -r $rec -mod $ss -noplot
                         done
                 fi
             done
@@ -53,7 +53,7 @@ else
                         echo "Spikesorting $rec"
                         for ss in $sorters
                             do
-                            python ../spike_sorting.py -r $rec -mod $ss -noplot
+                            python spike_sorting.py -r $rec -mod $ss -noplot
                             done
                     fi
                 done
@@ -65,7 +65,7 @@ else
                         echo "Spikesorting $rec"
                         for ss in $sorters
                             do
-                            python ../spike_sorting.py -r $rec -mod $ss -noplot
+                            python spike_sorting.py -r $rec -mod $ss -noplot
                             done
                     fi
                 done
@@ -81,7 +81,7 @@ else
                         echo "Spikesorting $rec"
                         for ss in $sorters
                             do
-                            python ../spike_sorting.py -r $rec -mod $ss -noplot
+                            python spike_sorting.py -r $rec -mod $ss -noplot
                             done
                     fi
                 done

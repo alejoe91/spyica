@@ -9,8 +9,9 @@ dependencies:
   - pandas
   - seaborn
   - pyyaml
-  - multiprocessing
   - pip:
-        - neo
-        - elephant
-        - quantities
+     - neo
+     - elephant
+     - quantities
+     - multiprocessing
+     - scikit-learn

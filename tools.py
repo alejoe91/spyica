@@ -44,12 +44,17 @@ def apply_pca(X, n_comp):
     return np.transpose(data), pca.components_
 
 
-def load_EAP_data(spike_folder, cell_names, all_categories,samples_per_cat=None):
+def load_EAP_data(spike_folder, cell_names=None, all_categories=None, samples_per_cat=None):
 
     print "Loading spike data ..."
-    spikelist = [f for f in os.listdir(spike_folder) if f.startswith('e_spikes') and  any(x in f for x in cell_names)]
-    loclist = [f for f in os.listdir(spike_folder) if f.startswith('e_pos') and  any(x in f for x in cell_names)]
-    rotlist = [f for f in os.listdir(spike_folder) if f.startswith('e_rot') and  any(x in f for x in cell_names)]
+    if cell_names:
+        spikelist = [f for f in os.listdir(spike_folder) if f.startswith('e_spikes') and  any(x in f for x in cell_names)]
+        loclist = [f for f in os.listdir(spike_folder) if f.startswith('e_pos') and  any(x in f for x in cell_names)]
+        rotlist = [f for f in os.listdir(spike_folder) if f.startswith('e_rot') and  any(x in f for x in cell_names)]
+    else:
+        spikelist = [f for f in os.listdir(spike_folder) if f.startswith('e_spikes')]
+        loclist = [f for f in os.listdir(spike_folder) if f.startswith('e_pos')]
+        rotlist = [f for f in os.listdir(spike_folder) if f.startswith('e_rot')]
 
     cells, occurrences = np.unique(sum([[f.split('_')[4]]*int(f.split('_')[2]) for f in spikelist],[]), return_counts=True)
     occ_dict = dict(zip(cells,occurrences))
@@ -78,19 +83,31 @@ def load_EAP_data(spike_folder, cell_names, all_categories,samples_per_cat=None)
         etype = f.split('_')[5]
         morphid = f.split('_')[6]
         print 'loading ', samples_to_read , ' samples for cell type: ', f
-        if category in all_categories:
-            spikes = np.load(join(spike_folder, f)) # [:spikes_per_cell, :, :]
+        if all_categories is not None:
+            if category in all_categories:
+                spikes = np.load(join(spike_folder, f)) # [:spikes_per_cell, :, :]
+                spikes_list.extend(spikes[:samples_to_read])
+                locs = np.load(join(spike_folder, loclist[idx])) # [:spikes_per_cell, :]
+                loc_list.extend(locs[:samples_to_read])
+                rots = np.load(join(spike_folder, rotlist[idx])) # [:spikes_per_cell, :]
+                rot_list.extend(rots[:samples_to_read])
+                category_list.extend([category] * samples_to_read)
+                etype_list.extend([etype] * samples_to_read)
+                morphid_list.extend([morphid] * samples_to_read)
+                loaded_categories.add(category)
+            else:
+                ignored_categories.add(category)
+        else:
+            spikes = np.load(join(spike_folder, f))  # [:spikes_per_cell, :, :]
             spikes_list.extend(spikes[:samples_to_read])
-            locs = np.load(join(spike_folder, loclist[idx])) # [:spikes_per_cell, :]
+            locs = np.load(join(spike_folder, loclist[idx]))  # [:spikes_per_cell, :]
             loc_list.extend(locs[:samples_to_read])
-            rots = np.load(join(spike_folder, rotlist[idx])) # [:spikes_per_cell, :]
+            rots = np.load(join(spike_folder, rotlist[idx]))  # [:spikes_per_cell, :]
             rot_list.extend(rots[:samples_to_read])
             category_list.extend([category] * samples_to_read)
             etype_list.extend([etype] * samples_to_read)
             morphid_list.extend([morphid] * samples_to_read)
             loaded_categories.add(category)
-        else:
-            ignored_categories.add(category)
 
     print "Done loading spike data ..."
     print "Loaded categories", loaded_categories
@@ -113,6 +130,16 @@ def load_validation_data(validation_folder,load_mcat=False):
     else:
         print "Done loading spike data ..."
         return np.array(spikes), np.array(feat), np.array(locs), np.array(rots), np.array(cats)
+
+def get_binary_cat(categories, excit, inhib):
+    binary_cat = []
+    for i, cat in enumerate(categories):
+        if cat in excit:
+            binary_cat.append('EXCIT')
+        elif cat in inhib:
+            binary_cat.append('INHIB')
+
+    return np.array(binary_cat, dtype=str)
 
 
 
@@ -242,8 +269,8 @@ def cubic_padding(spike, pad_len, fs, percent_mean=0.2):
         # Remove inital offset
         padded_sp = np.zeros(n_pre + len(sp) + n_post)
         padded_t = np.arange(len(padded_sp))
-        # initial_offset = np.mean(sp[0])
-        # sp -= initial_offset
+        initial_offset = np.mean(sp[0])
+        sp -= initial_offset
 
         x_pre = float(n_pre)
         x_pre_pad = np.arange(n_pre)
@@ -339,7 +366,7 @@ def detect_and_align(sources, fs, recordings, t_start=None, t_stop=None, n_std=5
                     nsamples_up = nsamples*upsample
                     first_spike = False
 
-                # upsample and find minimume
+                # upsample and find minimum
                 spike_up = ss.resample_poly(spike, upsample, 1)
                 # times_up = ss.resample_poly(t_spike, upsample, 1)*unit
                 t_spike_up = np.linspace(t_spike[0].magnitude, t_spike[-1].magnitude, num=len(spike_up)) * unit
@@ -394,6 +421,79 @@ def detect_and_align(sources, fs, recordings, t_start=None, t_stop=None, n_std=5
         idx_sources.append(s_idx)
 
     return spike_trains
+
+
+def extract_wf(sst, sources, recordings, times, fs, upsample=8):
+    '''
+
+    Parameters
+    ----------
+    sst
+    sources
+
+    Returns
+    -------
+
+    '''
+    import scipy.signal as ss
+    import quantities as pq
+
+    n_pad = int(2 * pq.ms * fs.rescale('kHz'))
+    unit = times[0].rescale('ms').units
+
+    for (st, s) in zip(sst, sources):
+        sp_wf = []
+        sp_rec_wf = []
+        sp_amp = []
+        first_spike = True
+
+        for t in st:
+            idx = np.where(times>t)[0][0]
+            # find single waveforms crossing thresholds
+            if idx - n_pad > 0 and idx + n_pad < len(s):
+                spike = s[idx - n_pad:idx + n_pad]
+                t_spike = times[idx - n_pad:idx + n_pad]
+                spike_rec = recordings[:, idx - n_pad:idx + n_pad]
+            elif idx - n_pad < 0:
+                spike = s[:idx + n_pad]
+                spike = np.pad(spike, (np.abs(idx - n_pad), 0), 'constant')
+                t_spike = times[:idx + n_pad]
+                t_spike = np.pad(t_spike, (np.abs(idx - n_pad), 0), 'constant') * unit
+                spike_rec = recordings[:, :idx + n_pad]
+                spike_rec = np.pad(spike_rec, ((0, 0), (np.abs(idx - n_pad), 0)), 'constant')
+            elif idx + n_pad > len(s):
+                spike = s[idx - n_pad:]
+                spike = np.pad(spike, (0, idx + n_pad - len(s)), 'constant')
+                t_spike = times[idx - n_pad:]
+                t_spike = np.pad(t_spike, (0, idx + n_pad - len(s)), 'constant') * unit
+                spike_rec = recordings[:, idx - n_pad:]
+                spike_rec = np.pad(spike_rec, ((0, 0), (0, idx + n_pad - len(s))), 'constant')
+
+            if first_spike:
+                nsamples = len(spike)
+                nsamples_up = nsamples*upsample
+                first_spike = False
+
+            # upsample and find minimume
+            spike_up = ss.resample_poly(spike, upsample, 1)
+            t_spike_up = np.linspace(t_spike[0].magnitude, t_spike[-1].magnitude, num=len(spike_up)) * unit
+
+            min_idx_up = np.argmin(spike_up)
+            min_amp_up = np.min(spike_up)
+            min_time_up = t_spike_up[min_idx_up]
+
+            min_idx = np.argmin(spike)
+            min_amp = np.min(spike)
+            min_time = t_spike[min_idx]
+
+            sp_wf.append(spike_up)
+            sp_rec_wf.append(spike_rec)
+            sp_amp.append(min_amp_up)
+
+        st.waveforms = np.array(sp_rec_wf)
+        st.annotate(ica_amp=np.array(sp_amp))
+        st.annotate(ica_wf=np.array(sp_wf))
+
 
 
 def reject_duplicate_spiketrains(sst, percent_threshold=0.8, min_spikes=3):
@@ -613,7 +713,7 @@ def bin_spiketimes(spike_times, fs=None, T=None, t_stop=None):
     return np.array(resampled_mat), binned_spikes
 
 
-def ISI_amplitude_modulation(st, mrand=1, sdrand=0.05, n_spikes=1, exp=0.5, mem_ISI = 10*pq.ms):
+def ISI_amplitude_modulation(st, n_el=1, mrand=1, sdrand=0.05, n_spikes=1, exp=0.5, mem_ISI = 10*pq.ms):
     '''
 
     Parameters
@@ -632,48 +732,53 @@ def ISI_amplitude_modulation(st, mrand=1, sdrand=0.05, n_spikes=1, exp=0.5, mem_
 
     import elephant.statistics as stat
 
-    ISI = stat.isi(st).rescale('ms')
-    # mem_ISI = 2*mean_ISI
-    amp_mod = np.zeros(len(st))
-    amp_mod[0] = sdrand*np.random.randn() + mrand
-    cons = np.zeros(len(st))
+    if n_el == 1:
+        ISI = stat.isi(st).rescale('ms')
+        # mem_ISI = 2*mean_ISI
+        amp_mod = np.zeros(len(st))
+        amp_mod[0] = sdrand*np.random.randn() + mrand
+        cons = np.zeros(len(st))
 
-    for i, isi in enumerate(ISI):
-        if n_spikes == 0:
-            amp_mod[i + 1] = sdrand * np.random.randn() + mrand
-        elif n_spikes == 1:
-            if isi > mem_ISI:
-                amp_mod[i + 1] = sdrand * np.random.randn() + mrand
+        for i, isi in enumerate(ISI):
+            if n_spikes == 1:
+                if isi > mem_ISI:
+                    amp_mod[i + 1] = sdrand * np.random.randn() + mrand
+                else:
+                    amp_mod[i + 1] = isi.magnitude ** exp * (1. / mem_ISI.magnitude ** exp) + sdrand * np.random.randn()
             else:
-                amp_mod[i + 1] = isi.magnitude ** exp * (1. / mem_ISI.magnitude ** exp) + sdrand * np.random.randn()
-        else:
-            consecutive = 0
-            bursting=True
-            while consecutive < n_spikes and bursting:
-                if i-consecutive >= 0:
-                    if ISI[i-consecutive] > mem_ISI:
-                        bursting = False
+                consecutive = 0
+                bursting=True
+                while consecutive < n_spikes and bursting:
+                    if i-consecutive >= 0:
+                        if ISI[i-consecutive] > mem_ISI:
+                            bursting = False
+                        else:
+                            consecutive += 1
                     else:
-                        consecutive += 1
-                else:
-                    bursting = False
+                        bursting = False
 
-            if consecutive == 0:
-                amp_mod[i + 1] = sdrand * np.random.randn() + mrand
-            elif consecutive==1:
-                amp = (isi / float(consecutive)) ** exp * (1. / mem_ISI.magnitude ** exp)
-                # scale std by amp
-                amp_mod[i + 1] = amp + amp * sdrand * np.random.randn()
-            else:
-                if i != len(ISI):
-                    isi_mean = np.mean(ISI[i-consecutive+1:i+1])
+                if consecutive == 0:
+                    amp_mod[i + 1] = sdrand * np.random.randn() + mrand
+                elif consecutive==1:
+                    amp = (isi / float(consecutive)) ** exp * (1. / mem_ISI.magnitude ** exp)
+                    # scale std by amp
+                    amp_mod[i + 1] = amp + amp * sdrand * np.random.randn()
                 else:
-                    isi_mean = np.mean(ISI[i - consecutive + 1:])
-                amp = (isi_mean/float(consecutive)) ** exp * (1. / mem_ISI.magnitude ** exp)
-                # scale std by amp
-                amp_mod[i + 1] = amp + amp * sdrand * np.random.randn()
+                    if i != len(ISI):
+                        isi_mean = np.mean(ISI[i-consecutive+1:i+1])
+                    else:
+                        isi_mean = np.mean(ISI[i - consecutive + 1:])
+                    amp = (isi_mean/float(consecutive)) ** exp * (1. / mem_ISI.magnitude ** exp)
+                    # scale std by amp
+                    amp_mod[i + 1] = amp + amp * sdrand * np.random.randn()
 
-            cons[i+1] = consecutive
+                cons[i+1] = consecutive
+    else:
+        if n_spikes == 0:
+            amp_mod = []
+            cons = []
+            for i, sp in enumerate(st):
+                amp_mod.append(sdrand * np.random.randn(n_el) + mrand)
 
     return amp_mod, cons
 
@@ -788,39 +893,74 @@ def cluster_spike_amplitudes(sst, metric='cal', min_sihlo=0.8, min_cal=150, max_
                             if keep_all:
                                 for clust in np.unique(labels):
                                     idxs = np.where(labels == clust)[0]
-                                    red_spikes = sst[i][idxs].copy()
+                                    red_spikes = sst[i][idxs]
+                                    red_spikes.annotations = copy(sst[i].annotations)
                                     if 'ica_amp' in red_spikes.annotations:
-                                        red_spikes.annotate(ica_amp=red_spikes.annotations['ica_amp'])
+                                        red_spikes.annotate(ica_amp=red_spikes.annotations['ica_amp'][idxs])
                                     if 'ica_wf' in red_spikes.annotations:
-                                        red_spikes.annotate(ica_wf=red_spikes.annotations['ica_wf'])
+                                        red_spikes.annotate(ica_wf=red_spikes.annotations['ica_wf'][idxs])
                                     red_spikes.annotate(ica_source=i)
                                     reduced_sst.append(red_spikes)
                                     reduced_amps.append(amps[idxs])
                                     keep_id.append(idxs)
                             else:
-                                if alg=='kmeans':
+                                if alg == 'kmeans':
                                     highest_clust = np.argmin(kmeans.cluster_centers_)
                                 elif alg == 'mog':
                                     highest_clust = np.argmin(gmm.means_)
-                                highest_idx = np.where(labels==highest_clust)[0]
-                                red_spikes = sst[i][highest_idx].copy()
+                                idxs = np.where(labels == highest_clust)[0]
+                                red_spikes = sst[i][idxs]
+                                red_spikes.annotations = copy(sst[i][idxs].annotations)
                                 if 'ica_amp' in red_spikes.annotations:
-                                    red_spikes.annotate(ica_amp=red_spikes.annotations['ica_amp'])
+                                    red_spikes.annotate(ica_amp=red_spikes.annotations['ica_amp'][idxs])
                                 if 'ica_wf' in red_spikes.annotations:
-                                    red_spikes.annotate(ica_wf=red_spikes.annotations['ica_wf'])
+                                    red_spikes.annotate(ica_wf=red_spikes.annotations['ica_wf'][idxs])
                                 red_spikes.annotate(ica_source=i)
                                 reduced_sst.append(red_spikes)
-                                reduced_amps.append(amps[highest_idx])
-                                keep_id.append(highest_idx)
+                                reduced_amps.append(amps[idxs])
+                                keep_id.append(idxs)
+                            # if keep_all:
+                            #     for clust in np.unique(labels):
+                            #         idxs = np.where(labels == clust)[0]
+                            #         red_spikes = copy(sst[i])
+                            #         red_spikes.annotations = copy(sst[i].annotations)
+                            #         if 'ica_amp' in red_spikes.annotations:
+                            #             red_spikes.annotate(ica_amp=red_spikes.annotations['ica_amp'])
+                            #         if 'ica_wf' in red_spikes.annotations:
+                            #             red_spikes.annotate(ica_wf=red_spikes.annotations['ica_wf'])
+                            #         red_spikes.annotate(ica_source=i)
+                            #         reduced_sst.append(red_spikes)
+                            #         reduced_amps.append(amps[idxs])
+                            #         keep_id.append(idxs)
+                            # else:
+                            #     if alg=='kmeans':
+                            #         highest_clust = np.argmin(kmeans.cluster_centers_)
+                            #     elif alg == 'mog':
+                            #         highest_clust = np.argmin(gmm.means_)
+                            #     highest_idx = np.where(labels==highest_clust)[0]
+                            #     red_spikes = sst[i][highest_idx].copy()
+                            #     if 'ica_amp' in red_spikes.annotations:
+                            #         red_spikes.annotate(ica_amp=red_spikes.annotations['ica_amp'])
+                            #     if 'ica_wf' in red_spikes.annotations:
+                            #         red_spikes.annotate(ica_wf=red_spikes.annotations['ica_wf'])
+                            #     red_spikes.annotate(ica_source=i)
+                            #     reduced_sst.append(red_spikes)
+                            #     reduced_amps.append(amps[highest_idx])
+                            #     keep_id.append(highest_idx)
                     silhos[i] = silho
                     cal_hars[i] = cal_har
                 else:
-                    sst[i].annotate(ica_source=i)
-                    reduced_sst.append(sst[i].copy())
+                    red_spikes = copy(sst[i])
+                    red_spikes.annotations = copy(sst[i].annotations)
+                    red_spikes.annotate(ica_source=i)
+                    reduced_sst.append(red_spikes)
                     reduced_amps.append(amps)
                     keep_id.append(range(len(sst[i])))
             else:
-                reduced_sst.append(sst[i].copy())
+                red_spikes = copy(sst[i])
+                red_spikes.annotations = copy(sst[i].annotations)
+                red_spikes.annotate(ica_source=i)
+                reduced_sst.append(red_spikes)
                 reduced_amps.append(amps)
                 keep_id.append(range(len(sst[i])))
 
@@ -1245,6 +1385,28 @@ def evaluate_spiketrains(gtst, sst, t_jitt = 1*pq.ms, overlapping=False, paralle
 
 
     return counts, put_pairs, cc_matr
+
+
+def evaluate_PI(gt_mix, ic_mix):
+    '''
+
+    Parameters
+    ----------
+    gt_mix
+    ic_mix
+
+    Returns
+    -------
+
+    '''
+    C = np.matmul(ic_mix, gt_mix.T)
+    N = gt_mix.shape[0]
+
+    PI = 1./(N-1) * (N - 0.5*(np.sum(np.max(C**2, axis=1)/np.sum(C**2, axis=1))
+                              + np.sum(np.max(C**2, axis=0)/np.sum(C**2, axis=0))))
+
+    return PI, C
+
 
 
 def annotate_overlapping(gtst, t_jitt = 1*pq.ms, overlapping_pairs=None, verbose=False):

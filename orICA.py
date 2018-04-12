@@ -25,7 +25,7 @@ class State():
         self.kurtsign = kurtsign
 
 class ORICA():
-    def __init__(self, data, numpass=1, weights=None, sphering='offline', block_white=8, block_ica=8, nsub=0,
+    def __init__(self, data, numpass=1, weights=None, sphering='offline', lambda_0=0.995, block_white=8, block_ica=8, nsub=0,
                  forgetfac='cooling', localstat=np.inf, ffdecayrate=0.6, evalconverg=True, verbose=False, mu=0, eta=0,
                  adjacency=None):
         '''
@@ -73,6 +73,7 @@ class ORICA():
         '''
 
         nChs, nPts = data.shape
+        self.count = 0
 
         numPass = numpass
         verbose = verbose
@@ -86,7 +87,279 @@ class ORICA():
         blockSizeICA = block_ica
         numSubgaussian = nsub
 
-        self.adaptiveFF = {'profile': forgetfac, 'tau_const': np.inf, 'gamma': 0.6, 'lambda_0': 0.995, 'decayRateAlpha': 0.02,
+        self.adaptiveFF = {'profile': forgetfac, 'tau_const': np.inf, 'gamma': 0.6, 'lambda_0': lambda_0, 'decayRateAlpha': 0.02,
+                      'upperBoundBeta': 1e-3, 'transBandWidthGamma': 1, 'transBandCenter': 5, 'lambdaInitial': 0.1}
+        self.evalConvergence = {'profile': evalconverg, 'leakyAvgDelta': 0.01, 'leakyAvgDeltaVar': 1e-3}
+
+        self.adjacency = adjacency
+        self.mu = mu
+        self.eta = eta
+
+        if weights is None:
+            weights = np.eye(nChs)
+
+        ##############################
+        # initialize state variables #
+        ##############################
+        icaweights = weights
+        if onlineWhitening:
+            icasphere = np.eye(nChs)
+
+        lambda_k = np.zeros((1, blockSizeICA))
+        minNonStatIdx =[]
+        counter       = 1
+
+        if self.adaptiveFF['profile'] == 'cooling' or  self.adaptiveFF['profile'] == 'constant':
+            self.adaptiveFF['lambda_const']  = 1-np.exp(-1 / (self.adaptiveFF['tau_const']))
+
+        if self.evalConvergence['profile']:
+            Rn =[]
+            nonStatIdx =[]
+
+        # sign of kurtosis for each component: true(supergaussian), false(subgaussian)
+        kurtsign = np.ones((nChs, 1))
+        if numSubgaussian != 0:
+            kurtsign[:numSubgaussian] = 0
+
+
+        ######################
+        # sphere-whiten data #
+        ######################
+        if not onlineWhitening: # pre - whitening
+            if verbose:
+                print('Use pre-whitening method.')
+            icasphere = 2.0 * la.inv(sqrtm(np.cov(data))) # find the "sphering" matrix = spher()
+        else: # Online RLS Whitening
+            if verbose:
+                print('Use online whitening method.')
+        # whiten / sphere the data
+        data_w = np.matmul(icasphere, data)
+
+        self.state = State(icaweights, icasphere, lambda_k, minNonStatIdx, counter, Rn, nonStatIdx, kurtsign)
+
+        #########
+        # ORICA #
+        #########
+
+        # divide data into blocks for online block update
+        numBlock = int(np.floor(nPts / np.min([blockSizeICA, blockSizeWhite])))
+
+        if verbose:
+            printflag = 0
+            if self.adaptiveFF['profile'] == 'cooling':
+                print('Running ORICA with cooling forgetting factor...')
+            elif self.adaptiveFF['profile'] == 'constant':
+                print('Running ORICA with constant forgetting factor...')
+            elif self.adaptiveFF['profile'] == 'adaptive':
+                print('Running ORICA with adaptive forgetting factor...')
+        t_start = time.time()
+
+        for it in range(numPass):
+            for bi in range(numBlock):
+                dataRange = np.arange(int(np.floor(bi * nPts / numBlock)),
+                                  int(np.min([nPts, np.floor((bi + 1) * nPts / numBlock)])))
+                if onlineWhitening:
+                    self.dynamicWhitening(data_w[:, dataRange], dataRange)
+                    data_w[:, dataRange] = np.matmul(self.state.icasphere, data_w[:, dataRange])
+                self.dynamicOrica(data_w[:, dataRange], dataRange)
+
+                if verbose:
+                    if printflag < np.floor(10 * (it * numBlock + bi) / numPass / numBlock):
+                        printflag = printflag + 1
+                        print(10 * printflag, '%')
+
+        if verbose:
+            processing_time = time.time() - t_start
+            print('ORICA Finished. Elapsed time: ', processing_time, ' sec.')
+
+        # output weights and sphere matrices
+        self.sphere = self.state.icasphere
+        self.unmixing = np.matmul(self.state.icaweights, self.sphere)
+        self.mixing = la.pinv(np.matmul(self.unmixing, self.sphere)).T
+        self.y = np.matmul(self.unmixing, data)
+
+
+    def dynamicWhitening(self, blockdata, dataRange):
+        nPts = blockdata.shape[1]
+
+        if self.adaptiveFF['profile'] == 'cooling':
+            lambda_ = self.genCoolingFF(self.state.counter+dataRange, self.adaptiveFF['gamma'], self.adaptiveFF['lambda_0'])
+            if lambda_[0] < self.adaptiveFF['lambda_const']:
+                lambda_ = np.squeeze(np.tile(self.adaptiveFF['lambda_const'], (1, nPts)))
+        elif self.adaptiveFF['profile'] == 'constant':
+            lambda_ = np.squeeze(np.tile(self.adaptiveFF['lambda_const'], (1, nPts)))
+        elif self.adaptiveFF['profile'] == 'adaptive':
+            lambda_ = np.squeeze(np.tile(self.state.lambda_k[-1], (1, nPts)))
+
+
+        v = np.matmul(self.state.icasphere, blockdata) # pre - whitened data
+        lambda_avg = 1 - lambda_[int(np.ceil(len(lambda_) / 2))] # median lambda
+        QWhite = lambda_avg / (1-lambda_avg) + np.trace(np.matmul(v, v.T)) / nPts
+        self.state.icasphere = 1 / lambda_avg * (self.state.icasphere - np.matmul(v, v.T) / nPts
+                                            / QWhite * self.state.icasphere)
+
+
+    def dynamicOrica(self, blockdata, dataRange, nlfunc=None):
+
+        # initialize
+        nChs, nPts = blockdata.shape
+        f = np.zeros((nChs, nPts))
+        # compute source activation using previous weight matrix
+        y = np.matmul(self.state.icaweights, blockdata)
+
+        # choose nonlinear functions for super- vs. sub-gaussian
+        if nlfunc is None:
+            f[np.where(self.state.kurtsign==1), :]  = -2 * np.tanh(y[np.where(self.state.kurtsign==1), :])  # Supergaussian
+            f[np.where(self.state.kurtsign==0), :] = 2 * np.tanh(y[np.where(self.state.kurtsign==0), :])  # Subgaussian
+        else:
+            f = nlfunc(y);
+
+        # compute Non-Stationarity Index (nonStatIdx) and variance of source dynamics (Var)
+        if self.evalConvergence['profile']:
+            modelFitness = np.eye(nChs) + np.matmul(y, f.T)/nPts
+            variance = blockdata * blockdata
+            if len(self.state.Rn) == 0:
+                self.state.Rn = modelFitness
+            else:
+                self.state.Rn = (1 - self.evalConvergence['leakyAvgDelta']) * self.state.Rn + \
+                                self.evalConvergence['leakyAvgDelta'] * modelFitness
+                #!!! this does not account for block update!
+            self.state.nonStatIdx = la.norm(self.state.Rn)
+
+
+        if self.adaptiveFF['profile'] == 'cooling':
+            self.state.lambda_k = self.genCoolingFF(self.state.counter + dataRange, self.adaptiveFF['gamma'],
+                                                    self.adaptiveFF['lambda_0'])
+            if self.state.lambda_k[0] < self.adaptiveFF['lambda_const']:
+                self.state.lambda_k = np.squeeze(np.tile(self.adaptiveFF['lambda_const'], (1, nPts)))
+            self.state.counter = self.state.counter + nPts;
+        elif self.adaptiveFF['profile'] == 'constant':
+            self.state.lambda_k = np.arange(nPts) * self.adaptiveFF['lambda_0']
+        elif self.adaptiveFF['profile'] == 'adaptive':
+            if len(self.state.minNonStatIdx) != 0:
+                self.state.minNonStatIdx = self.state.nonStatIdx
+            self.state.minNonStatIdx = np.max([np.min(self.state.minNonStatIdx, self.state.nonStatIdx), 1])
+            ratioOfNormRn = self.state.nonStatIdx / self.state.minNonStatIdx
+            self.state.lambda_k = self.genAdaptiveFF(dataRange, self.state.lambda_k, ratioOfNormRn)
+
+        # update weight matrix using online recursive ICA block update rule
+        lambda_prod = np.prod(1. / (1.-self.state.lambda_k))
+        # Q = 1 + self.state.lambda_k * (np.einsum('km,km->m', f, y)-1);
+        Q = 1 + self.state.lambda_k * (np.sum(f * y, axis=0) - 1);
+        curr_state = self.state.icaweights
+
+        self.count += 1
+
+        # Compute smoothing factor
+        if self.mu != 0:
+            smoothing_matrix = np.zeros(self.state.icaweights.shape)
+            for i, comp in enumerate(smoothing_matrix):
+                for adj in self.adjacency:
+                    smoothing_matrix[i] = 1./len(adj)*np.sum(self.state.icaweights[i, adj])
+
+            self.state.icaweights = lambda_prod * ((self.state.icaweights -
+                                                   np.matmul(np.matmul(np.matmul(y,  np.diag(self.state.lambda_k / Q)),
+                                                             f.T), self.state.icaweights)) -
+                                                   self.mu*(self.state.icaweights - smoothing_matrix)) #- eta*())
+        else:
+            self.state.icaweights = lambda_prod * (self.state.icaweights -
+                                                   np.matmul(np.matmul(np.matmul(y, np.diag(self.state.lambda_k / Q)),
+                                                                    f.T), self.state.icaweights))
+
+
+        # orthogonalize weight matrix
+        try:
+            D, V = eigh(np.matmul(self.state.icaweights, self.state.icaweights.T))
+        except LinAlgError:
+            raise Exception()
+
+        # curr_state = self.state.icaweights
+        self.state.icaweights = np.matmul(np.matmul(la.solve(np.diag((np.sqrt(np.abs(D)) * np.sign(D))).T, V.T).T,
+                                                    V.T), self.state.icaweights)
+
+    def genCoolingFF(self, t, gamma, lambda_0):
+        lambda_ = lambda_0 / (t ** gamma)
+        return lambda_
+
+    def genAdaptiveFF(self, dataRange, lambda_, ratioOfNormRn):
+        decayRateAlpha = self.adaptiveFF['decayRateAlpha']
+        upperBoundBeta = self.adaptiveFF['upperBoundBeta']
+        transBandWidthGamma = self.adaptiveFF['transBandWidthGamma']
+        transBandCenter = self.adaptiveFF['transBandCenter']
+
+        gainForErrors = upperBoundBeta * 0.5 * (1 + np.tanh((ratioOfNormRn - transBandCenter) / transBandWidthGamma))
+        def f(n):
+            return  (1 + gainForErrors) ** n * lambda_[-1] - decayRateAlpha * ((1 + gainForErrors) ** (2 * n - 1) -
+                                                                               (1 + gainForErrors) ** (n - 1)) / \
+                                                                                gainForErrors * lambda_[-1] **2
+        lambda_ = f(range(len(dataRange)))
+
+        return lambda_
+
+
+
+class ORICA_W():
+    def __init__(self, data, numpass=1, weights=None, sphering='offline', lambda_0=0.995, block_white=8, block_ica=8, nsub=0,
+                 forgetfac='cooling', localstat=np.inf, ffdecayrate=0.6, evalconverg=True, verbose=False, mu=0, eta=0,
+                 adjacency=None):
+        '''
+
+        Parameters
+        ----------
+        data:          np.array - input data (chans-by-samples)
+        numpass:       number of passes through the data
+        weights:       initial weight matrix     (default -> eye())
+        sphering:      ['offline' | 'online'] use online RLS whitening method or pre-whitening
+        block_white:   block size for online whitening (in samples)
+        block_ica:     block size for ORICA (in samples)
+        nsub:          number of subgaussian sources in EEG signal (default -> 0)
+        forgetfac:     ['cooling'|'constant'|'adaptive'] forgetting factor profiles
+                        'cooling': monotonically decreasing, for relatively stationary data
+                        'constant': constant, for online tracking non-stationary data.
+                        See reference [2] for more information.
+        localstat:     local stationarity (in number of samples) corresponding to
+                       constant forgetting factor at steady state
+        ffdecayrate:   [0<f<1] decay rate of (cooling) forgetting factor (default -> 0.6)
+        evalconverg:   [0|1] evaluate convergence such as Non-Stationarity Index
+        verbose:       bool - give ascii messages  (default -> False)
+        mu:            coefficient for spatial smothing
+        eta:           coefficient for temporal smoothing (when convolutive)
+        adjacency:     adjavency matrix (if mu not 0)
+
+        Reference:
+          [1] S.-H. Hsu, T. Mullen, T.-P Jung, and G. Cauwenberghs, "Real-time
+           adaptive EEG source separation using online recursive independent
+           component analysis," IEEE Transactions on Neural Systems and
+           Rehabilitation Engineering, 2016.
+
+           [2] S.-H. Hsu, L. Pion-Tanachini, T.-P Jung, and G. Cauwenberghs,
+           "Tracking non-stationary EEG sources using adaptive online
+           recursive independent component analysis," in IEEE EMBS, 2015.
+
+           [3] S.-H. Hsu, T. Mullen, T.-P Jung, and G. Cauwenberghs, "Online
+           recursive independent component analysis for real-time source
+           separation of high-density EEG," in IEEE EMBS, 2014.
+
+         Author:
+               Sheng-Hsiou (Shawn) Hsu, SCCN, UCSD.
+               shh078@ucsd.edu
+        '''
+
+        nChs, nPts = data.shape
+
+        numPass = numpass
+        verbose = verbose
+
+        # Parameters for data whitening
+        if sphering == 'online':
+            onlineWhitening = True
+        else:
+            onlineWhitening = False
+        blockSizeWhite = block_white
+        blockSizeICA = block_ica
+        numSubgaussian = nsub
+
+        self.adaptiveFF = {'profile': forgetfac, 'tau_const': np.inf, 'gamma': 0.6, 'lambda_0': lambda_0, 'decayRateAlpha': 0.02,
                       'upperBoundBeta': 1e-3, 'transBandWidthGamma': 1, 'transBandCenter': 5, 'lambdaInitial': 0.1}
         self.evalConvergence = {'profile': evalconverg, 'leakyAvgDelta': 0.01, 'leakyAvgDeltaVar': 1e-3}
 
@@ -132,7 +405,7 @@ class ORICA():
             if verbose:
                 print('Use online whitening method.')
         # whiten / sphere the data
-        data = np.matmul(icasphere, data)
+        data_w = np.matmul(icasphere, data)
 
         self.state = State(icaweights, icasphere, lambda_k, minNonStatIdx, counter, Rn, nonStatIdx, kurtsign)
 
@@ -141,7 +414,7 @@ class ORICA():
         #########
 
         # divide data into blocks for online block update
-        numBlock = int(np.floor(nPts / np.min([blockSizeICA, blockSizeWhite])))
+        numBlock = int(np.floor(nPts))
 
         if verbose:
             printflag = 0
@@ -153,34 +426,76 @@ class ORICA():
                 print('Running ORICA with adaptive forgetting factor...')
         t_start = time.time()
 
+        dataRange = np.arange(nPts)
+        if self.adaptiveFF['profile'] == 'cooling':
+            self.state.lambda_k = self.genCoolingFF(self.state.counter + dataRange, self.adaptiveFF['gamma'],
+                                                    self.adaptiveFF['lambda_0'])
+            if self.state.lambda_k[0] < self.adaptiveFF['lambda_const']:
+                self.state.lambda_k = np.squeeze(np.tile(self.adaptiveFF['lambda_const'], (1, nPts)))
+                print('Whatever')
+            self.state.counter = self.state.counter + nPts;
+        elif self.adaptiveFF['profile'] == 'constant':
+            self.state.lambda_k = np.arange(nPts) * self.adaptiveFF['lambda_0']
+        elif self.adaptiveFF['profile'] == 'adaptive':
+            if len(self.state.minNonStatIdx) != 0:
+                self.state.minNonStatIdx = self.state.nonStatIdx
+            self.state.minNonStatIdx = np.max([np.min(self.state.minNonStatIdx, self.state.nonStatIdx), 1])
+            ratioOfNormRn = self.state.nonStatIdx / self.state.minNonStatIdx
+            self.state.lambda_k = self.genAdaptiveFF(dataRange, self.state.lambda_k, ratioOfNormRn)
+
+        # icaweights is A. Assumption: W is A.T
         for it in range(numPass):
-            for bi in range(numBlock - 1):
-                dataRange = np.arange(int(np.floor(bi * nPts / numBlock)),
-                                  int(np.min([nPts, np.floor((bi + 1) * nPts / numBlock)])))
-                if onlineWhitening:
-                    self.dynamicWhitening(data[:, dataRange], dataRange)
-                    data[:, dataRange] = np.matmul(self.state.icasphere, data[:, dataRange])
+            for bi in range(nPts):
+                A = self.state.icaweights.T
+                W = self.state.icaweights
+                v = np.expand_dims(data_w[:, bi], axis=1)
+                y = np.expand_dims(np.matmul(W, data_w[:, bi]), axis=1)
+                f = np.zeros((nChs, 1))
 
-                # if np.any(np.isnan(data[:, dataRange])):
-                #     raise Exception()
-                self.dynamicOrica(data[:, dataRange], dataRange)
+                # choose nonlinear functions for super- vs. sub-gaussian
+                f[np.where(self.state.kurtsign == 1)] = -2 * np.tanh(
+                    y[np.where(self.state.kurtsign == 1)])  # Supergaussian
+                f[np.where(self.state.kurtsign == 0)] = 2 * np.tanh(
+                    y[np.where(self.state.kurtsign == 0)])  # Subgaussian
 
-                if verbose:
-                    if printflag < np.floor(10 * (it * numBlock + bi) / numPass / numBlock):
-                        printflag = printflag + 1
-                        print(10 * printflag, '%')
+
+                # update unmixing matrix using online recursive ICA block update rule
+
+                # # Compute smoothing factor
+                if self.mu != 0:
+                    dS = self.computeSmoothingFactor().T
+                    u = np.matmul(f, v.T) + self.mu * dS
+                else:
+                    u = np.matmul(f, v.T)
+
+                self.state.icaweights = (1 - self.state.lambda_k[bi]) * W + \
+                                        self.state.lambda_k[bi] * u
+
+                # orthogonalize weight matrix
+                if not np.mod(bi, block_ica):
+                    try:
+                        D, V = eigh(np.matmul(self.state.icaweights, self.state.icaweights.T))
+                    except LinAlgError:
+                        raise Exception()
+
+                    # diagonalize matrix (maybe every n steps)
+                    self.state.icaweights = np.matmul(
+                        np.matmul(la.solve(np.diag((np.sqrt(np.abs(D)) * np.sign(D))).T, V.T).T,
+                                  V.T), self.state.icaweights)
+                    if verbose:
+                        if printflag < np.floor(10 * (it * numBlock + bi) / numPass / numBlock):
+                            printflag = printflag + 1
+                            print(10 * printflag, '%')
 
         if verbose:
             processing_time = time.time() - t_start
-            print('Finished. Elapsed time: ', processing_time, ' sec.')
+            print('ORICA Finished. Elapsed time: ', processing_time, ' sec.')
 
         # output weights and sphere matrices
         self.sphere = self.state.icasphere
         self.unmixing = np.matmul(self.state.icaweights, self.sphere)
         self.mixing = la.pinv(np.matmul(self.unmixing, self.sphere)).T
-
-        # self.y = np.transpose(la.pinv(np.matmul(np.matmul(self.unmixing, self.sphere), data)))
-        self.y = np.matmul(np.matmul(self.unmixing, self.sphere), data)
+        self.y = np.matmul(self.unmixing, data)
 
 
     def dynamicWhitening(self, blockdata, dataRange):
@@ -198,47 +513,189 @@ class ORICA():
 
         v = np.matmul(self.state.icasphere, blockdata) # pre - whitened data
         lambda_avg = 1 - lambda_[int(np.ceil(len(lambda_) / 2))] # median lambda
-        QWhite = lambda_avg / (1-lambda_avg) + np.trace(np.matmul(v, np.transpose(v))) / nPts
-        self.state.icasphere = 1 / lambda_avg * (self.state.icasphere - np.matmul(v, np.transpose(v)) / nPts
+        QWhite = lambda_avg / (1-lambda_avg) + np.trace(np.matmul(v, v.T)) / nPts
+        self.state.icasphere = 1 / lambda_avg * (self.state.icasphere - np.matmul(v, v.T) / nPts
                                             / QWhite * self.state.icasphere)
 
+    def computeSmoothingFactor(self):
+        A = self.state.icaweights
+        W = self.state.icaweights.T
+        M = self.state.icasphere
+        s_der = np.zeros(W.shape)
+        for i in range(s_der.shape[0]):
+            for j, adj in enumerate(adj_graph):
+                if i in adj:
+                    # print(i, j, adj_graph[j])
+                    s_der[i, j] = 1. / len(adj) * M.T[i, j]
 
-    def dynamicOrica(self, blockdata, dataRange, nlfunc=None):
+        s_mat = np.zeros(W.shape)
+        for i, comp in enumerate(s_mat):
+            for j, adj in enumerate(adj_graph):
+                s_mat[i, j] = 1. / len(adj) * np.sum(A[i, adj])
 
-        # initialize
-        nChs, nPts = blockdata.shape
-        f = np.zeros((nChs, nPts))
-        # compute source activation using previous weight matrix
-        y = np.matmul(self.state.icaweights, blockdata)
+        B = np.sum(A) - np.sum(s_mat)
+        dS = 2. * B * (M.T - s_der)
+        dS_T = dS.T
 
-        # choose nonlinear functions for super- vs. sub-gaussian
-        if nlfunc is None:
-            f[np.where(self.state.kurtsign==1), :]  = -2 * np.tanh(y[np.where(self.state.kurtsign==1), :])  # Supergaussian
-            f[np.where(self.state.kurtsign==0), :] = 2 * np.tanh(y[np.where(self.state.kurtsign==0), :])  # Subgaussian
+        return dS_T
+
+    def genCoolingFF(self, t, gamma, lambda_0):
+        lambda_ = lambda_0 / (t ** gamma)
+        return lambda_
+
+    def genAdaptiveFF(self, dataRange, lambda_, ratioOfNormRn):
+        decayRateAlpha = self.adaptiveFF['decayRateAlpha']
+        upperBoundBeta = self.adaptiveFF['upperBoundBeta']
+        transBandWidthGamma = self.adaptiveFF['transBandWidthGamma']
+        transBandCenter = self.adaptiveFF['transBandCenter']
+
+        gainForErrors = upperBoundBeta * 0.5 * (1 + np.tanh((ratioOfNormRn - transBandCenter) / transBandWidthGamma))
+        def f(n):
+            return  (1 + gainForErrors) ** n * lambda_[-1] - decayRateAlpha * ((1 + gainForErrors) ** (2 * n - 1) -
+                                                                               (1 + gainForErrors) ** (n - 1)) / \
+                                                                                gainForErrors * lambda_[-1] **2
+        lambda_ = f(range(len(dataRange)))
+
+        return lambda_
+
+class ORICA_A():
+    def __init__(self, data, numpass=1, weights=None, sphering='offline', lambda_0=0.995, block_white=8, block_ica=8, nsub=0,
+                 forgetfac='cooling', localstat=np.inf, ffdecayrate=0.6, evalconverg=True, verbose=False, mu=0, eta=0,
+                 adjacency=None):
+        '''
+
+        Parameters
+        ----------
+        data:          np.array - input data (chans-by-samples)
+        numpass:       number of passes through the data
+        weights:       initial weight matrix     (default -> eye())
+        sphering:      ['offline' | 'online'] use online RLS whitening method or pre-whitening
+        block_white:   block size for online whitening (in samples)
+        block_ica:     block size for ORICA (in samples)
+        nsub:          number of subgaussian sources in EEG signal (default -> 0)
+        forgetfac:     ['cooling'|'constant'|'adaptive'] forgetting factor profiles
+                        'cooling': monotonically decreasing, for relatively stationary data
+                        'constant': constant, for online tracking non-stationary data.
+                        See reference [2] for more information.
+        localstat:     local stationarity (in number of samples) corresponding to
+                       constant forgetting factor at steady state
+        ffdecayrate:   [0<f<1] decay rate of (cooling) forgetting factor (default -> 0.6)
+        evalconverg:   [0|1] evaluate convergence such as Non-Stationarity Index
+        verbose:       bool - give ascii messages  (default -> False)
+        mu:            coefficient for spatial smothing
+        eta:           coefficient for temporal smoothing (when convolutive)
+        adjacency:     adjavency matrix (if mu not 0)
+
+        Reference:
+          [1] S.-H. Hsu, T. Mullen, T.-P Jung, and G. Cauwenberghs, "Real-time
+           adaptive EEG source separation using online recursive independent
+           component analysis," IEEE Transactions on Neural Systems and
+           Rehabilitation Engineering, 2016.
+
+           [2] S.-H. Hsu, L. Pion-Tanachini, T.-P Jung, and G. Cauwenberghs,
+           "Tracking non-stationary EEG sources using adaptive online
+           recursive independent component analysis," in IEEE EMBS, 2015.
+
+           [3] S.-H. Hsu, T. Mullen, T.-P Jung, and G. Cauwenberghs, "Online
+           recursive independent component analysis for real-time source
+           separation of high-density EEG," in IEEE EMBS, 2014.
+
+         Author:
+               Sheng-Hsiou (Shawn) Hsu, SCCN, UCSD.
+               shh078@ucsd.edu
+        '''
+
+        nChs, nPts = data.shape
+
+        numPass = numpass
+        verbose = verbose
+
+        # Parameters for data whitening
+        if sphering == 'online':
+            onlineWhitening = True
         else:
-            f = nlfunc(y);
+            onlineWhitening = False
+        blockSizeWhite = block_white
+        blockSizeICA = block_ica
+        numSubgaussian = nsub
 
-        # compute Non-Stationarity Index (nonStatIdx) and variance of source dynamics (Var)
+        self.adaptiveFF = {'profile': forgetfac, 'tau_const': np.inf, 'gamma': 0.6, 'lambda_0': lambda_0, 'decayRateAlpha': 0.02,
+                      'upperBoundBeta': 1e-3, 'transBandWidthGamma': 1, 'transBandCenter': 5, 'lambdaInitial': 0.1}
+        self.evalConvergence = {'profile': evalconverg, 'leakyAvgDelta': 0.01, 'leakyAvgDeltaVar': 1e-3}
+
+        self.adjacency = adjacency
+        self.mu = mu
+        self.eta = eta
+
+        if weights is None:
+            weights = np.eye(nChs)
+
+        ##############################
+        # initialize state variables #
+        ##############################
+        icaweights = weights
+        if onlineWhitening:
+            icasphere = np.eye(nChs)
+
+        lambda_k = np.zeros((1, blockSizeICA))
+        minNonStatIdx =[]
+        counter       = 1
+
+        if self.adaptiveFF['profile'] == 'cooling' or  self.adaptiveFF['profile'] == 'constant':
+            self.adaptiveFF['lambda_const']  = 1-np.exp(-1 / (self.adaptiveFF['tau_const']))
+
         if self.evalConvergence['profile']:
-            modelFitness = np.eye(nChs) + np.matmul(y, np.transpose(f))/nPts
-            variance = blockdata * blockdata
-            if len(self.state.Rn) == 0:
-                self.state.Rn = modelFitness
-            else:
-                self.state.Rn = (1 - self.evalConvergence['leakyAvgDelta']) * self.state.Rn + \
-                                self.evalConvergence['leakyAvgDelta'] * modelFitness
-                #!!! this does not account for block update!
-            self.state.nonStatIdx = la.norm(self.state.Rn)
+            Rn =[]
+            nonStatIdx =[]
+
+        # sign of kurtosis for each component: true(supergaussian), false(subgaussian)
+        kurtsign = np.ones((nChs, 1))
+        if numSubgaussian != 0:
+            kurtsign[:numSubgaussian] = 0
 
 
+        ######################
+        # sphere-whiten data #
+        ######################
+        if not onlineWhitening: # pre - whitening
+            if verbose:
+                print('Use pre-whitening method.')
+                icasphere = 2.0 * la.inv(sqrtm(np.cov(data))) # find the "sphering" matrix = spher()
+        else: # Online RLS Whitening
+            if verbose:
+                print('Use online whitening method.')
+        # whiten / sphere the data
+        data_w = np.matmul(icasphere, data)
+
+        self.state = State(icaweights, icasphere, lambda_k, minNonStatIdx, counter, Rn, nonStatIdx, kurtsign)
+
+        #########
+        # ORICA #
+        #########
+
+        # divide data into blocks for online block update
+        numBlock = int(np.floor(nPts))
+
+        if verbose:
+            printflag = 0
+            if self.adaptiveFF['profile'] == 'cooling':
+                print('Running ORICA with cooling forgetting factor...')
+            elif self.adaptiveFF['profile'] == 'constant':
+                print('Running ORICA with constant forgetting factor...')
+            elif self.adaptiveFF['profile'] == 'adaptive':
+                print('Running ORICA with adaptive forgetting factor...')
+        t_start = time.time()
+
+        dataRange = np.arange(nPts)
         if self.adaptiveFF['profile'] == 'cooling':
             self.state.lambda_k = self.genCoolingFF(self.state.counter + dataRange, self.adaptiveFF['gamma'],
                                                     self.adaptiveFF['lambda_0'])
             if self.state.lambda_k[0] < self.adaptiveFF['lambda_const']:
                 self.state.lambda_k = np.squeeze(np.tile(self.adaptiveFF['lambda_const'], (1, nPts)))
+                print('Whatever')
             self.state.counter = self.state.counter + nPts;
         elif self.adaptiveFF['profile'] == 'constant':
-            self.state.lambda_k = np.squeeze(np.tile(self.adaptiveFF['lambda_const'], (1, nPts)))
+            self.state.lambda_k = np.arange(nPts) * self.adaptiveFF['lambda_0']
         elif self.adaptiveFF['profile'] == 'adaptive':
             if len(self.state.minNonStatIdx) != 0:
                 self.state.minNonStatIdx = self.state.nonStatIdx
@@ -246,38 +703,102 @@ class ORICA():
             ratioOfNormRn = self.state.nonStatIdx / self.state.minNonStatIdx
             self.state.lambda_k = self.genAdaptiveFF(dataRange, self.state.lambda_k, ratioOfNormRn)
 
-        # update weight matrix using online recursive ICA block update rule
-        lambda_prod = np.prod(1. / (1.-self.state.lambda_k))
-        Q = 1 + self.state.lambda_k * (np.einsum('km,km->m', f, y)-1);
-        curr_state = self.state.icaweights
+        # icaweights is A. Assumption: W is A.T
+        for it in range(numPass):
+            for bi in range(nPts):
+                A = self.state.icaweights
+                W = self.state.icaweights.T
+                v = np.expand_dims(data_w[:, bi], axis=1)
+                y = np.expand_dims(np.matmul(W, data_w[:, bi]), axis=1)
+                f = np.zeros((nChs, 1))
 
-        # Compute smoothing factor
-        if self.mu != 0:
-            smoothing_matrix = np.zeros(self.state.icaweights.shape)
-            for i, comp in enumerate(smoothing_matrix):
-                for adj in self.adjacency:
-                    smoothing_matrix[i] = 1./len(adj)*np.sum(self.state.icaweights[i, adj])
-
-            self.state.icaweights = lambda_prod * ((self.state.icaweights -
-                                                   np.matmul(np.matmul(np.matmul(y,  np.diag(self.state.lambda_k / Q)),
-                                                             np.transpose(f)), self.state.icaweights)) +
-                                                   self.mu*(self.state.icaweights - smoothing_matrix)) #- eta*())
-        else:
-            self.state.icaweights = lambda_prod * ((self.state.icaweights -
-                                                    np.matmul(np.matmul(np.matmul(y, np.diag(self.state.lambda_k / Q)),
-                                                                        np.transpose(f)), self.state.icaweights)))
+                # choose nonlinear functions for super- vs. sub-gaussian
+                f[np.where(self.state.kurtsign == 1)] = -2 * np.tanh(
+                    y[np.where(self.state.kurtsign == 1)])  # Supergaussian
+                f[np.where(self.state.kurtsign == 0)] = 2 * np.tanh(
+                    y[np.where(self.state.kurtsign == 0)])  # Subgaussian
 
 
-        # orthogonalize weight matrix
-        try:
-            D, V = eigh(np.matmul(self.state.icaweights, np.transpose(self.state.icaweights)))
-        except LinAlgError:
-            raise Exception()
+                # update weight matrix using online recursive ICA block update rule
 
-        # curr_state = self.state.icaweights
-        self.state.icaweights = np.matmul(np.matmul(
-            np.transpose(la.solve(np.transpose(np.diag((np.sqrt(np.abs(D)) * np.sign(D)))), np.transpose(V))),
-                                                    np.transpose(V)), self.state.icaweights)
+                # # Compute smoothing factor
+                if self.mu != 0:
+                    dS = self.computeSmoothingFactor()
+                    u = np.matmul(v, f.T) + self.mu * dS
+                else:
+                    u = np.matmul(v, f.T)
+
+                self.state.icaweights = (1 - self.state.lambda_k[bi]) * A + \
+                                        self.state.lambda_k[bi] * u
+
+                # orthogonalize weight matrix
+                if not np.mod(bi, block_ica):
+                    try:
+                        D, V = eigh(np.matmul(self.state.icaweights, self.state.icaweights.T))
+                    except LinAlgError:
+                        raise Exception()
+
+                    # diagonalize matrix (maybe every n steps)
+                    self.state.icaweights = np.matmul(
+                        np.matmul(la.solve(np.diag((np.sqrt(np.abs(D)) * np.sign(D))).T, V.T).T,
+                                  V.T), self.state.icaweights)
+                    if verbose:
+                        if printflag < np.floor(10 * (it * numBlock + bi) / numPass / numBlock):
+                            printflag = printflag + 1
+                            print(10 * printflag, '%')
+
+        if verbose:
+            processing_time = time.time() - t_start
+            print('ORICA Finished. Elapsed time: ', processing_time, ' sec.')
+
+        # output weights and sphere matrices
+        self.sphere = self.state.icasphere
+        # mixing from data to y
+        self.unmixing = np.matmul(la.pinv(self.state.icaweights), self.sphere)
+        self.mixing = la.pinv(self.unmixing).T
+        self.y = np.matmul(self.unmixing, data)
+
+
+    def dynamicWhitening(self, blockdata, dataRange):
+        nPts = blockdata.shape[1]
+
+        if self.adaptiveFF['profile'] == 'cooling':
+            lambda_ = self.genCoolingFF(self.state.counter+dataRange, self.adaptiveFF['gamma'], self.adaptiveFF['lambda_0'])
+            if lambda_[0] < self.adaptiveFF['lambda_const']:
+                lambda_ = np.squeeze(np.tile(self.adaptiveFF['lambda_const'], (1, nPts)))
+        elif self.adaptiveFF['profile'] == 'constant':
+            lambda_ = np.squeeze(np.tile(self.adaptiveFF['lambda_const'], (1, nPts)))
+        elif self.adaptiveFF['profile'] == 'adaptive':
+            lambda_ = np.squeeze(np.tile(self.state.lambda_k[-1], (1, nPts)))
+
+
+        v = np.matmul(self.state.icasphere, blockdata) # pre - whitened data
+        lambda_avg = 1 - lambda_[int(np.ceil(len(lambda_) / 2))] # median lambda
+        QWhite = lambda_avg / (1-lambda_avg) + np.trace(np.matmul(v, v.T)) / nPts
+        self.state.icasphere = 1 / lambda_avg * (self.state.icasphere - np.matmul(v, v.T) / nPts
+                                            / QWhite * self.state.icasphere)
+
+    def computeSmoothingFactor(self):
+        A = self.state.icaweights
+        W = self.state.icaweights.T
+        M = self.state.icasphere
+        s_der = np.zeros(W.shape)
+        for i in range(s_der.shape[0]):
+            for j, adj in enumerate(adj_graph):
+                if i in adj:
+                    # print(i, j, adj_graph[j])
+                    s_der[i, j] = 1. / len(adj) * M.T[i, j]
+
+        s_mat = np.zeros(W.shape)
+        for i, comp in enumerate(s_mat):
+            for j, adj in enumerate(adj_graph):
+                s_mat[i, j] = 1. / len(adj) * np.sum(A[i, adj])
+
+        B = np.sum(A) - np.sum(s_mat)
+        dS = 2. * B * (M.T - s_der)
+        dS_T = dS.T
+
+        return dS_T
 
     def genCoolingFF(self, t, gamma, lambda_0):
         lambda_ = lambda_0 / (t ** gamma)
@@ -299,7 +820,577 @@ class ORICA():
         return lambda_
 
 
-def instICA(X, n_comp='all', n_chunks=1, chunk_size=None, adjacency_graph=None, mu=0):
+class ORICA_W_block():
+    def __init__(self, data, numpass=1, weights=None, sphering='offline', lambda_0=0.995, block_white=8, block_ica=8, nsub=0,
+                 forgetfac='cooling', localstat=np.inf, ffdecayrate=0.6, evalconverg=True, verbose=False, mu=0, eta=0,
+                 adjacency=None):
+        '''
+
+        Parameters
+        ----------
+        data:          np.array - input data (chans-by-samples)
+        numpass:       number of passes through the data
+        weights:       initial weight matrix     (default -> eye())
+        sphering:      ['offline' | 'online'] use online RLS whitening method or pre-whitening
+        block_white:   block size for online whitening (in samples)
+        block_ica:     block size for ORICA (in samples)
+        nsub:          number of subgaussian sources in EEG signal (default -> 0)
+        forgetfac:     ['cooling'|'constant'|'adaptive'] forgetting factor profiles
+                        'cooling': monotonically decreasing, for relatively stationary data
+                        'constant': constant, for online tracking non-stationary data.
+                        See reference [2] for more information.
+        localstat:     local stationarity (in number of samples) corresponding to
+                       constant forgetting factor at steady state
+        ffdecayrate:   [0<f<1] decay rate of (cooling) forgetting factor (default -> 0.6)
+        evalconverg:   [0|1] evaluate convergence such as Non-Stationarity Index
+        verbose:       bool - give ascii messages  (default -> False)
+        mu:            coefficient for spatial smothing
+        eta:           coefficient for temporal smoothing (when convolutive)
+        adjacency:     adjavency matrix (if mu not 0)
+
+        Reference:
+          [1] S.-H. Hsu, T. Mullen, T.-P Jung, and G. Cauwenberghs, "Real-time
+           adaptive EEG source separation using online recursive independent
+           component analysis," IEEE Transactions on Neural Systems and
+           Rehabilitation Engineering, 2016.
+
+           [2] S.-H. Hsu, L. Pion-Tanachini, T.-P Jung, and G. Cauwenberghs,
+           "Tracking non-stationary EEG sources using adaptive online
+           recursive independent component analysis," in IEEE EMBS, 2015.
+
+           [3] S.-H. Hsu, T. Mullen, T.-P Jung, and G. Cauwenberghs, "Online
+           recursive independent component analysis for real-time source
+           separation of high-density EEG," in IEEE EMBS, 2014.
+
+         Author:
+               Sheng-Hsiou (Shawn) Hsu, SCCN, UCSD.
+               shh078@ucsd.edu
+        '''
+
+        nChs, nPts = data.shape
+
+        numPass = numpass
+        verbose = verbose
+
+        # Parameters for data whitening
+        if sphering == 'online':
+            onlineWhitening = True
+        else:
+            onlineWhitening = False
+        blockSizeWhite = block_white
+        blockSizeICA = block_ica
+        numSubgaussian = nsub
+
+        self.adaptiveFF = {'profile': forgetfac, 'tau_const': np.inf, 'gamma': 0.6, 'lambda_0': lambda_0, 'decayRateAlpha': 0.02,
+                      'upperBoundBeta': 1e-3, 'transBandWidthGamma': 1, 'transBandCenter': 5, 'lambdaInitial': 0.1}
+        self.evalConvergence = {'profile': evalconverg, 'leakyAvgDelta': 0.01, 'leakyAvgDeltaVar': 1e-3}
+
+        self.adjacency = adjacency
+        self.mu = mu
+        self.eta = eta
+
+        if weights is None:
+            weights = np.eye(nChs)
+
+        ##############################
+        # initialize state variables #
+        ##############################
+        icaweights = weights
+        if onlineWhitening:
+            icasphere = np.eye(nChs)
+
+        lambda_k = np.zeros((1, blockSizeICA))
+        minNonStatIdx =[]
+        counter       = 1
+
+        if self.adaptiveFF['profile'] == 'cooling' or  self.adaptiveFF['profile'] == 'constant':
+            self.adaptiveFF['lambda_const']  = 1-np.exp(-1 / (self.adaptiveFF['tau_const']))
+
+        if self.evalConvergence['profile']:
+            Rn =[]
+            nonStatIdx =[]
+
+        # sign of kurtosis for each component: true(supergaussian), false(subgaussian)
+        kurtsign = np.ones((nChs, 1))
+        if numSubgaussian != 0:
+            kurtsign[:numSubgaussian] = 0
+
+
+        ######################
+        # sphere-whiten data #
+        ######################
+        if not onlineWhitening: # pre - whitening
+            if verbose:
+                print('Use pre-whitening method.')
+                icasphere = 2.0 * la.inv(sqrtm(np.cov(data))) # find the "sphering" matrix = spher()
+        else: # Online RLS Whitening
+            if verbose:
+                print('Use online whitening method.')
+        # whiten / sphere the data
+        data_w = np.matmul(icasphere, data)
+
+        self.state = State(icaweights, icasphere, lambda_k, minNonStatIdx, counter, Rn, nonStatIdx, kurtsign)
+
+        #########
+        # ORICA #
+        #########
+
+        # divide data into blocks for online block update
+        numBlock = int(np.floor(nPts / np.min([blockSizeICA, blockSizeWhite])))
+
+        if verbose:
+            printflag = 0
+            if self.adaptiveFF['profile'] == 'cooling':
+                print('Running ORICA with cooling forgetting factor...')
+            elif self.adaptiveFF['profile'] == 'constant':
+                print('Running ORICA with constant forgetting factor...')
+            elif self.adaptiveFF['profile'] == 'adaptive':
+                print('Running ORICA with adaptive forgetting factor...')
+        t_start = time.time()
+
+        for it in range(numPass):
+            for bi in range(numBlock):
+                dataRange = np.arange(int(np.floor(bi * nPts / numBlock)),
+                                  int(np.min([nPts, np.floor((bi + 1) * nPts / numBlock)])))
+                if onlineWhitening:
+                    self.dynamicWhitening(data_w[:, dataRange], dataRange)
+                    data_w[:, dataRange] = np.matmul(self.state.icasphere, data_w[:, dataRange])
+
+                # if np.any(np.isnan(data[:, dataRange])):
+                #     raise Exception()
+                self.dynamicOrica(data_w[:, dataRange], dataRange)
+
+                if verbose:
+                    if printflag < np.floor(10 * (it * numBlock + bi) / numPass / numBlock):
+                        printflag = printflag + 1
+                        print(10 * printflag, '%')
+
+        if verbose:
+            processing_time = time.time() - t_start
+            print('ORICA Finished. Elapsed time: ', processing_time, ' sec.')
+
+        # output weights and sphere matrices
+        self.sphere = self.state.icasphere
+        self.unmixing = np.matmul(self.state.icaweights, self.sphere)
+        self.mixing = la.pinv(np.matmul(self.unmixing, self.sphere)).T
+        self.y = np.matmul(self.unmixing, data)
+
+
+    def dynamicWhitening(self, blockdata, dataRange):
+        nPts = blockdata.shape[1]
+
+        if self.adaptiveFF['profile'] == 'cooling':
+            lambda_ = self.genCoolingFF(self.state.counter+dataRange, self.adaptiveFF['gamma'], self.adaptiveFF['lambda_0'])
+            if lambda_[0] < self.adaptiveFF['lambda_const']:
+                lambda_ = np.squeeze(np.tile(self.adaptiveFF['lambda_const'], (1, nPts)))
+        elif self.adaptiveFF['profile'] == 'constant':
+            lambda_ = np.squeeze(np.tile(self.adaptiveFF['lambda_const'], (1, nPts)))
+        elif self.adaptiveFF['profile'] == 'adaptive':
+            lambda_ = np.squeeze(np.tile(self.state.lambda_k[-1], (1, nPts)))
+
+
+        v = np.matmul(self.state.icasphere, blockdata) # pre - whitened data
+        lambda_avg = 1 - lambda_[int(np.ceil(len(lambda_) / 2))] # median lambda
+        QWhite = lambda_avg / (1-lambda_avg) + np.trace(np.matmul(v, v.T)) / nPts
+        self.state.icasphere = 1 / lambda_avg * (self.state.icasphere - np.matmul(v, v.T) / nPts
+                                            / QWhite * self.state.icasphere)
+
+
+    def dynamicOrica(self, blockdata, dataRange, nlfunc=None):
+
+        # initialize
+        nChs, nPts = blockdata.shape
+        f = np.zeros((nChs, nPts))
+        # compute source activation using previous weight matrix
+        y = np.matmul(self.state.icaweights, blockdata)
+        v = blockdata
+
+        # choose nonlinear functions for super- vs. sub-gaussian
+        if nlfunc is None:
+            f[np.where(self.state.kurtsign==1), :]  = -2 * np.tanh(y[np.where(self.state.kurtsign==1), :])  # Supergaussian
+            f[np.where(self.state.kurtsign==0), :] = 2 * np.tanh(y[np.where(self.state.kurtsign==0), :])  # Subgaussian
+        else:
+            f = nlfunc(y);
+
+        # compute Non-Stationarity Index (nonStatIdx) and variance of source dynamics (Var)
+        if self.evalConvergence['profile']:
+            modelFitness = np.eye(nChs) + np.matmul(y, f.T)/nPts
+            variance = blockdata * blockdata
+            if len(self.state.Rn) == 0:
+                self.state.Rn = modelFitness
+            else:
+                self.state.Rn = (1 - self.evalConvergence['leakyAvgDelta']) * self.state.Rn + \
+                                self.evalConvergence['leakyAvgDelta'] * modelFitness
+                #!!! this does not account for block update!
+            self.state.nonStatIdx = la.norm(self.state.Rn)
+
+
+        if self.adaptiveFF['profile'] == 'cooling':
+            self.state.lambda_k = self.genCoolingFF(self.state.counter + dataRange, self.adaptiveFF['gamma'],
+                                                    self.adaptiveFF['lambda_0'])
+            if self.state.lambda_k[0] < self.adaptiveFF['lambda_const']:
+                self.state.lambda_k = np.squeeze(np.tile(self.adaptiveFF['lambda_const'], (1, nPts)))
+            self.state.counter = self.state.counter + nPts;
+        elif self.adaptiveFF['profile'] == 'constant':
+            self.state.lambda_k = np.arange(nPts) * self.adaptiveFF['lambda_0']
+        elif self.adaptiveFF['profile'] == 'adaptive':
+            if len(self.state.minNonStatIdx) != 0:
+                self.state.minNonStatIdx = self.state.nonStatIdx
+            self.state.minNonStatIdx = np.max([np.min(self.state.minNonStatIdx, self.state.nonStatIdx), 1])
+            ratioOfNormRn = self.state.nonStatIdx / self.state.minNonStatIdx
+            self.state.lambda_k = self.genAdaptiveFF(dataRange, self.state.lambda_k, ratioOfNormRn)
+
+        # update weight matrix using online recursive ICA block update rule
+        # MADE CHANGES HERE
+        # lambda_prod = np.prod((1.-self.state.lambda_k))
+        coeff = np.append(1, self.state.lambda_k) * np.append(1,np.cumprod(1 - self.state.lambda_k[::-1]))[::-1]
+
+        # u = [np.matmul(np.expand_dims(f[:,i], axis=1), np.expand_dims(v[:,i], axis=1).T)
+        #      for i in range(len(self.state.lambda_k))]
+        # lambda_int = np.array([np.prod([(1 - self.state.lambda_k[k + l])
+        #               for l in range(1, len(self.state.lambda_k) - k)]) for k in range(len(self.state.lambda_k))])
+        # curr_state = self.state.icaweights
+
+        # Compute smoothing factor
+        # TODO change smoothing
+        if self.mu != 0:
+            smoothing_matrix = np.zeros(self.state.icaweights.shape)
+            for i, comp in enumerate(smoothing_matrix):
+                for adj in self.adjacency:
+                    smoothing_matrix[i] = 1./len(adj)*np.sum(self.state.icaweights[i, adj])
+
+            self.state.icaweights = lambda_prod * ((self.state.icaweights -
+                                                   np.matmul(np.matmul(np.matmul(y,  np.diag(self.state.lambda_k / Q)),
+                                                             f.T), self.state.icaweights)) +
+                                                   self.mu*(self.state.icaweights - smoothing_matrix)) #- eta*())
+        else:
+            # TODO sum over matrices
+            # self.state.icaweights = lambda_prod * self.state.icaweights + \
+            #                         np.sum([self.state.lambda_k[k] *
+            #                                 np.prod([(1 - self.state.lambda_k[k + l])
+            #                                          for l in range(1, len(self.state.lambda_k)-k)]) *
+            #                                 u[k] for k in range(len(self.state.lambda_k))], axis=0)
+            # self.state.icaweights = lambda_prod * self.state.icaweights + \
+            #                         np.sum([self.state.lambda_k[k] * lambda_int[k] * u[k] for k in range(len(lambda_int))], axis=0)
+            self.state.icaweights = coeff[0] * self.state.icaweights + np.matmul(np.matmul(f, np.diag(coeff[1:])), v.T)
+
+
+        # orthogonalize weight matrix
+        try:
+            D, V = eigh(np.matmul(self.state.icaweights, self.state.icaweights.T))
+        except LinAlgError:
+            raise Exception()
+
+        # curr_state = self.state.icaweights
+        self.state.icaweights = np.matmul(np.matmul(la.solve(np.diag((np.sqrt(np.abs(D)) * np.sign(D))).T, V.T).T,
+                                                    V.T), self.state.icaweights)
+
+    def genCoolingFF(self, t, gamma, lambda_0):
+        lambda_ = lambda_0 / (t ** gamma)
+        return lambda_
+
+    def genAdaptiveFF(self, dataRange, lambda_, ratioOfNormRn):
+        decayRateAlpha = self.adaptiveFF['decayRateAlpha']
+        upperBoundBeta = self.adaptiveFF['upperBoundBeta']
+        transBandWidthGamma = self.adaptiveFF['transBandWidthGamma']
+        transBandCenter = self.adaptiveFF['transBandCenter']
+
+        gainForErrors = upperBoundBeta * 0.5 * (1 + np.tanh((ratioOfNormRn - transBandCenter) / transBandWidthGamma))
+        def f(n):
+            return  (1 + gainForErrors) ** n * lambda_[-1] - decayRateAlpha * ((1 + gainForErrors) ** (2 * n - 1) -
+                                                                               (1 + gainForErrors) ** (n - 1)) / \
+                                                                                gainForErrors * lambda_[-1] **2
+        lambda_ = f(range(len(dataRange)))
+
+        return lambda_
+
+
+class ORICA_A_block():
+    def __init__(self, data, numpass=1, weights=None, sphering='offline', lambda_0=0.995, block_white=8, block_ica=8, nsub=0,
+                 forgetfac='cooling', localstat=np.inf, ffdecayrate=0.6, evalconverg=True, verbose=False, mu=0, eta=0,
+                 adjacency=None):
+        '''
+
+        Parameters
+        ----------
+        data:          np.array - input data (chans-by-samples)
+        numpass:       number of passes through the data
+        weights:       initial weight matrix     (default -> eye())
+        sphering:      ['offline' | 'online'] use online RLS whitening method or pre-whitening
+        block_white:   block size for online whitening (in samples)
+        block_ica:     block size for ORICA (in samples)
+        nsub:          number of subgaussian sources in EEG signal (default -> 0)
+        forgetfac:     ['cooling'|'constant'|'adaptive'] forgetting factor profiles
+                        'cooling': monotonically decreasing, for relatively stationary data
+                        'constant': constant, for online tracking non-stationary data.
+                        See reference [2] for more information.
+        localstat:     local stationarity (in number of samples) corresponding to
+                       constant forgetting factor at steady state
+        ffdecayrate:   [0<f<1] decay rate of (cooling) forgetting factor (default -> 0.6)
+        evalconverg:   [0|1] evaluate convergence such as Non-Stationarity Index
+        verbose:       bool - give ascii messages  (default -> False)
+        mu:            coefficient for spatial smothing
+        eta:           coefficient for temporal smoothing (when convolutive)
+        adjacency:     adjavency matrix (if mu not 0)
+
+        Reference:
+          [1] S.-H. Hsu, T. Mullen, T.-P Jung, and G. Cauwenberghs, "Real-time
+           adaptive EEG source separation using online recursive independent
+           component analysis," IEEE Transactions on Neural Systems and
+           Rehabilitation Engineering, 2016.
+
+           [2] S.-H. Hsu, L. Pion-Tanachini, T.-P Jung, and G. Cauwenberghs,
+           "Tracking non-stationary EEG sources using adaptive online
+           recursive independent component analysis," in IEEE EMBS, 2015.
+
+           [3] S.-H. Hsu, T. Mullen, T.-P Jung, and G. Cauwenberghs, "Online
+           recursive independent component analysis for real-time source
+           separation of high-density EEG," in IEEE EMBS, 2014.
+
+         Author:
+               Sheng-Hsiou (Shawn) Hsu, SCCN, UCSD.
+               shh078@ucsd.edu
+        '''
+
+        nChs, nPts = data.shape
+
+        numPass = numpass
+        verbose = verbose
+
+        # Parameters for data whitening
+        if sphering == 'online':
+            onlineWhitening = True
+        else:
+            onlineWhitening = False
+        blockSizeWhite = block_white
+        blockSizeICA = block_ica
+        numSubgaussian = nsub
+
+        self.adaptiveFF = {'profile': forgetfac, 'tau_const': np.inf, 'gamma': 0.6, 'lambda_0': lambda_0, 'decayRateAlpha': 0.02,
+                      'upperBoundBeta': 1e-3, 'transBandWidthGamma': 1, 'transBandCenter': 5, 'lambdaInitial': 0.1}
+        self.evalConvergence = {'profile': evalconverg, 'leakyAvgDelta': 0.01, 'leakyAvgDeltaVar': 1e-3}
+
+        self.adjacency = adjacency
+        self.mu = mu
+        self.eta = eta
+
+        if weights is None:
+            weights = np.eye(nChs)
+
+        ##############################
+        # initialize state variables #
+        ##############################
+        icaweights = weights
+        if onlineWhitening:
+            icasphere = np.eye(nChs)
+
+        lambda_k = np.zeros((1, blockSizeICA))
+        minNonStatIdx =[]
+        counter       = 1
+
+        if self.adaptiveFF['profile'] == 'cooling' or  self.adaptiveFF['profile'] == 'constant':
+            self.adaptiveFF['lambda_const']  = 1-np.exp(-1 / (self.adaptiveFF['tau_const']))
+
+        if self.evalConvergence['profile']:
+            Rn =[]
+            nonStatIdx =[]
+
+        # sign of kurtosis for each component: true(supergaussian), false(subgaussian)
+        kurtsign = np.ones((nChs, 1))
+        if numSubgaussian != 0:
+            kurtsign[:numSubgaussian] = 0
+
+
+        ######################
+        # sphere-whiten data #
+        ######################
+        if not onlineWhitening: # pre - whitening
+            if verbose:
+                print('Use pre-whitening method.')
+                icasphere = 2.0 * la.inv(sqrtm(np.cov(data))) # find the "sphering" matrix = spher()
+        else: # Online RLS Whitening
+            if verbose:
+                print('Use online whitening method.')
+        # whiten / sphere the data
+        data_w = np.matmul(icasphere, data)
+
+        self.state = State(icaweights, icasphere, lambda_k, minNonStatIdx, counter, Rn, nonStatIdx, kurtsign)
+
+        #########
+        # ORICA #
+        #########
+
+        # divide data into blocks for online block update
+        numBlock = int(np.floor(nPts / np.min([blockSizeICA, blockSizeWhite])))
+
+        if verbose:
+            printflag = 0
+            if self.adaptiveFF['profile'] == 'cooling':
+                print('Running ORICA with cooling forgetting factor...')
+            elif self.adaptiveFF['profile'] == 'constant':
+                print('Running ORICA with constant forgetting factor...')
+            elif self.adaptiveFF['profile'] == 'adaptive':
+                print('Running ORICA with adaptive forgetting factor...')
+
+        t_start = time.time()
+
+        for it in range(numPass):
+            for bi in range(numBlock):
+                dataRange = np.arange(int(np.floor(bi * nPts / numBlock)),
+                                  int(np.min([nPts, np.floor((bi + 1) * nPts / numBlock)])))
+                if onlineWhitening:
+                    self.dynamicWhitening(data_w[:, dataRange], dataRange)
+                    data_w[:, dataRange] = np.matmul(self.state.icasphere, data_w[:, dataRange])
+
+                self.dynamicOrica(data_w[:, dataRange], dataRange)
+
+                if verbose:
+                    if printflag < np.floor(10 * (it * numBlock + bi) / numPass / numBlock):
+                        printflag = printflag + 1
+                        print(10 * printflag, '%')
+
+        if verbose:
+            processing_time = time.time() - t_start
+            print('ORICA Finished. Elapsed time: ', processing_time, ' sec.')
+
+
+        # output weights and sphere matrices
+        self.sphere = self.state.icasphere
+        # mixing from data to y
+        self.unmixing = np.matmul(la.pinv(self.state.icaweights), self.sphere)
+        self.mixing = la.pinv(self.unmixing).T
+        self.y = np.matmul(self.unmixing, data)
+
+
+    def dynamicWhitening(self, blockdata, dataRange):
+        nPts = blockdata.shape[1]
+
+        if self.adaptiveFF['profile'] == 'cooling':
+            lambda_ = self.genCoolingFF(self.state.counter+dataRange, self.adaptiveFF['gamma'], self.adaptiveFF['lambda_0'])
+            if lambda_[0] < self.adaptiveFF['lambda_const']:
+                lambda_ = np.squeeze(np.tile(self.adaptiveFF['lambda_const'], (1, nPts)))
+        elif self.adaptiveFF['profile'] == 'constant':
+            lambda_ = np.squeeze(np.tile(self.adaptiveFF['lambda_const'], (1, nPts)))
+        elif self.adaptiveFF['profile'] == 'adaptive':
+            lambda_ = np.squeeze(np.tile(self.state.lambda_k[-1], (1, nPts)))
+
+
+        v = np.matmul(self.state.icasphere, blockdata) # pre - whitened data
+        lambda_avg = 1 - lambda_[int(np.ceil(len(lambda_) / 2))] # median lambda
+        QWhite = lambda_avg / (1-lambda_avg) + np.trace(np.matmul(v, v.T)) / nPts
+        self.state.icasphere = 1 / lambda_avg * (self.state.icasphere - np.matmul(v, v.T) / nPts
+                                            / QWhite * self.state.icasphere)
+
+    def dynamicOrica(self, blockdata, dataRange, nlfunc=None):
+
+        # initialize
+        nChs, nPts = blockdata.shape
+        f = np.zeros((nChs, nPts))
+        #TODO? compute source activation using previous weight matrix to keep orthogonality?
+        A = self.state.icaweights
+        W = self.state.icaweights.T
+        y = np.matmul(W, blockdata)
+        v = blockdata
+
+        # choose nonlinear functions for super- vs. sub-gaussian
+        if nlfunc is None:
+            f[np.where(self.state.kurtsign==1), :]  = -2 * np.tanh(y[np.where(self.state.kurtsign==1), :])  # Supergaussian
+            f[np.where(self.state.kurtsign==0), :] = 2 * np.tanh(y[np.where(self.state.kurtsign==0), :])  # Subgaussian
+        else:
+            f = nlfunc(y);
+
+        # compute Non-Stationarity Index (nonStatIdx) and variance of source dynamics (Var)
+        if self.evalConvergence['profile']:
+            modelFitness = np.eye(nChs) + np.matmul(y, f.T)/nPts
+            variance = blockdata * blockdata
+            if len(self.state.Rn) == 0:
+                self.state.Rn = modelFitness
+            else:
+                self.state.Rn = (1 - self.evalConvergence['leakyAvgDelta']) * self.state.Rn + \
+                                self.evalConvergence['leakyAvgDelta'] * modelFitness
+                #!!! this does not account for block update!
+            self.state.nonStatIdx = la.norm(self.state.Rn)
+
+
+        if self.adaptiveFF['profile'] == 'cooling':
+            self.state.lambda_k = self.genCoolingFF(self.state.counter + dataRange, self.adaptiveFF['gamma'],
+                                                    self.adaptiveFF['lambda_0'])
+            if self.state.lambda_k[0] < self.adaptiveFF['lambda_const']:
+                self.state.lambda_k = np.squeeze(np.tile(self.adaptiveFF['lambda_const'], (1, nPts)))
+            self.state.counter = self.state.counter + nPts;
+        elif self.adaptiveFF['profile'] == 'constant':
+            self.state.lambda_k = np.arange(nPts) * self.adaptiveFF['lambda_0']
+        elif self.adaptiveFF['profile'] == 'adaptive':
+            if len(self.state.minNonStatIdx) != 0:
+                self.state.minNonStatIdx = self.state.nonStatIdx
+            self.state.minNonStatIdx = np.max([np.min(self.state.minNonStatIdx, self.state.nonStatIdx), 1])
+            ratioOfNormRn = self.state.nonStatIdx / self.state.minNonStatIdx
+            self.state.lambda_k = self.genAdaptiveFF(dataRange, self.state.lambda_k, ratioOfNormRn)
+
+        # update weight matrix using online recursive ICA block update rule
+        # MADE CHANGES HERE
+        # lambda_prod = np.prod((1.-self.state.lambda_k))
+        # u = np.einsum('ij,kj->jik', v,f)
+        # # u = np.array([np.matmul(np.expand_dims(v[:,i], axis=1), np.expand_dims(f[:,i], axis=1).T)
+        # #                         for i in range(len(self.state.lambda_k))])
+        # lambda_int = np.array([np.prod([(1 - self.state.lambda_k[k + l])
+        #               for l in range(1, len(self.state.lambda_k) - k)]) for k in range(len(self.state.lambda_k))])
+        # curr_state = self.state.icaweights
+        coeff = np.append(1, self.state.lambda_k) * np.append(1, np.cumprod(1 - self.state.lambda_k[::-1]))[::-1]
+
+        # # Compute smoothing factor
+        # # TODO change smoothing
+        # if self.mu != 0:
+        #     smoothing_matrix = np.zeros(self.state.icaweights.shape)
+        #     for i, comp in enumerate(smoothing_matrix):
+        #         for adj in self.adjacency:
+        #             smoothing_matrix[i] = 1./len(adj)*np.sum(self.state.icaweights[i, adj])
+        #
+        #     self.state.icaweights = lambda_prod * ((self.state.icaweights -
+        #                                            np.matmul(np.matmul(np.matmul(y,  np.diag(self.state.lambda_k / Q)),
+        #                                                      f.T), self.state.icaweights)) +
+        #                                            self.mu*(self.state.icaweights - smoothing_matrix)) #- eta*())
+        # else:
+        # self.state.icaweights = lambda_prod * self.state.icaweights + \
+        #                         np.sum([self.state.lambda_k[k] * lambda_int[k] * u[k] for k in range(len(lambda_int))], axis=0)
+        # self.state.icaweights = lambda_prod * self.state.icaweights + np.einsum('i,ijk->jk',
+        #                                                                         self.state.lambda_k*lambda_int, u)
+        self.state.icaweights = coeff[0] * self.state.icaweights + np.matmul(np.matmul(v, np.diag(coeff[1:])), f.T)
+
+        # orthogonalize weight matrix
+        try:
+            D, V = eigh(np.matmul(self.state.icaweights, self.state.icaweights.T))
+        except LinAlgError:
+            raise Exception()
+
+        # curr_state = self.state.icaweights
+        self.state.icaweights = np.matmul(np.matmul(la.solve(np.diag((np.sqrt(np.abs(D)) * np.sign(D))).T, V.T).T,
+                                                    V.T), self.state.icaweights)
+
+
+    def genCoolingFF(self, t, gamma, lambda_0):
+        lambda_ = lambda_0 / (t ** gamma)
+        return lambda_
+
+    def genAdaptiveFF(self, dataRange, lambda_, ratioOfNormRn):
+        decayRateAlpha = self.adaptiveFF['decayRateAlpha']
+        upperBoundBeta = self.adaptiveFF['upperBoundBeta']
+        transBandWidthGamma = self.adaptiveFF['transBandWidthGamma']
+        transBandCenter = self.adaptiveFF['transBandCenter']
+
+        gainForErrors = upperBoundBeta * 0.5 * (1 + np.tanh((ratioOfNormRn - transBandCenter) / transBandWidthGamma))
+        def f(n):
+            return  (1 + gainForErrors) ** n * lambda_[-1] - decayRateAlpha * ((1 + gainForErrors) ** (2 * n - 1) -
+                                                                               (1 + gainForErrors) ** (n - 1)) / \
+                                                                                gainForErrors * lambda_[-1] **2
+        lambda_ = f(range(len(dataRange)))
+
+        return lambda_
+
+
+
+
+def instICA(X, n_comp='all', n_chunks=1, chunk_size=None, numpass=1, block_size=2000, adjacency_graph=None, mu=0):
     """Performs instantaneous ICA.
 
     Parameters
@@ -347,8 +1438,8 @@ def instICA(X, n_comp='all', n_chunks=1, chunk_size=None, adjacency_graph=None, 
     else:
         X_reduced = X
 
-    orica = ORICA(X_reduced, sphering='offline', verbose=True, numpass=1,
-                  block_white=2000, block_ica=2000, adjacency=adjacency_graph, mu=mu)
+    orica = ORICA(X_reduced, sphering='offline', verbose=True, numpass=numpass,
+                  block_white=block_size, block_ica=block_size, adjacency=adjacency_graph, mu=mu)
 
     sources = orica.y
     A = orica.mixing
@@ -382,6 +1473,7 @@ def cICAemb(X, n_comp='all', L=3):
     W : unmixing matrix
 
     """
+    #TODO reduce number of sources to n_chan (not L*n_chan)
     n_chan = X.shape[0]
     X_block = np.zeros((L*n_chan, X.shape[1]-L))
     for ch in range(n_chan):
@@ -404,11 +1496,120 @@ def cICAemb(X, n_comp='all', L=3):
     return sources, A, W
 
 if __name__ == '__main__':
+    import sys
+    from os.path import join
+    from scipy import stats
+    import MEAutility as MEA
+    from tools import *
+    import yaml
+    from spike_sorting import plot_mixing
 
-    recordings = np.fromfile('/home/alessio/Documents/Codes/SpyICA/recordings/convolution/recording_physrot'
-                             '_Neuronexus-32-cut-30_10_2.0s_uncorrelated_10.0_5.0Hz_15.0Hz_modulation_all_'
-                             '08-02-2018:18:08_2904/kilosort/raw.dat', dtype='int16').reshape(64000, 30).transpose()
+    if len(sys.argv) == 1:
+        folder = '/home/alessio/Documents/Codes/SpyICA/recordings/convolution/recording_physrot_Neuronexus-32-cut-30_' \
+                 '10_10.0s_uncorrelated_10.0_5.0Hz_15.0Hz_modulated_24-01-2018_22_00'
+        filename = join(folder, 'kilosort/raw.dat')
+        recordings = np.fromfile(filename, dtype='int16')\
+            .reshape(-1, 30).transpose()
 
-    ori = ORICA(recordings, sphering='offline', verbose=True, numpass=1, block_white=1000, block_ica=1000)
+        rec_info = [f for f in os.listdir(folder) if '.yaml' in f or '.yml' in f][0]
+        with open(join(folder, rec_info), 'r') as f:
+            info = yaml.load(f)
+
+        electrode_name =info['General']['electrode name']
+        mea_pos, mea_dim, mea_pitch = MEA.return_mea(electrode_name)
+
+        templates = np.load(join(folder, 'templates.npy'))
+
+    else:
+        folder = sys.argv[1]
+        recordings = np.load(join(folder, 'recordings.npy')).astype('int16')
+        rec_info = [f for f in os.listdir(folder) if '.yaml' in f or '.yml' in f][0]
+        with open(join(folder, rec_info), 'r') as f:
+            info = yaml.load(f)
+
+        electrode_name = info['General']['electrode name']
+        mea_pos, mea_dim, mea_pitch = MEA.return_mea(electrode_name)
+
+        templates = np.load(join(folder, 'templates.npy'))
+
+    block_size = 200
+    orica_type = 'A_block' # original - W - A -  W_block - A_block
+    forgetfac='constant'
+    lambda_val = 1. / recordings.shape[1] # 0.995
+    # lambda_val = 0.995
+
+    adj_graph = extract_adjacency(mea_pos, np.max(mea_pitch) + 5)
+    # ori = ORICAsimple(recordings, sphering='offline', forgetfac='constant',
+    #             verbose=True, numpass=5, block_white=1000, block_ica=1000)
+    if orica_type == 'original':
+        ori = ORICA(recordings, sphering='offline', forgetfac=forgetfac, lambda_0=lambda_val,
+                    mu=0, verbose=True, numpass=1, block_white=block_size, block_ica=block_size)
+    elif orica_type == 'W':
+        ori = ORICA_W(recordings, sphering='offline', forgetfac=forgetfac, lambda_0=lambda_val,
+                          mu=0, verbose=True, numpass=1, block_white=block_size, block_ica=block_size)
+    elif orica_type == 'A':
+        ori = ORICA_A(recordings, sphering='offline', forgetfac=forgetfac, lambda_0=lambda_val,
+                    mu=0, verbose=True, numpass=1, block_white=block_size, block_ica=block_size)
+    elif orica_type == 'W_block':
+        ori = ORICA_W_block(recordings, sphering='offline', forgetfac=forgetfac, lambda_0=lambda_val,
+                    mu=0, verbose=True, numpass=1, block_white=block_size, block_ica=block_size)
+    elif orica_type == 'A_block':
+        ori = ORICA_A_block(recordings, sphering='offline', forgetfac=forgetfac, lambda_0=lambda_val,
+                    mu=0, verbose=True, numpass=1, block_white=block_size, block_ica=block_size)
+    else:
+        raise Exception('ORICA type not understood')
 
     y = ori.y
+    w = ori.unmixing
+    m = ori.sphere
+    a = ori.mixing
+
+    # Skewness
+    skew_thresh = 0.1
+    sk = stats.skew(y, axis=1)
+    high_sk = np.where(np.abs(sk) >= skew_thresh)
+
+    # Kurtosis
+    ku_thresh = 1
+    ku = stats.kurtosis(y, axis=1)
+    high_ku = np.where(np.abs(ku) >= ku_thresh)
+
+    # Smoothness
+    a /= np.max(a)
+    smooth = np.zeros(a.shape[0])
+    for i in range(len(smooth)):
+       smooth[i] = (np.mean([1. / len(adj) * np.sum(a[i, j] - a[i, adj]) ** 2
+                                             for j, adj in enumerate(adj_graph)]))
+
+    print('High skewness: ', np.abs(sk[high_sk]))
+    print('Average high skewness: ', np.mean(np.abs(sk[high_sk])))
+    print('Number high skewness: ', len(sk[high_sk]))
+
+    print('High kurtosis: ', ku[high_ku])
+    print('Average high kurtosis: ', np.mean(ku[high_ku]))
+    print('Number high kurtosis: ', len(ku[high_ku]))
+
+    print('Smoothing: ', smooth[high_sk])
+    print('Average smoothing: ', np.mean(smooth[high_sk]))
+
+    f = plot_mixing(a[high_sk], mea_pos, mea_dim)
+    f.suptitle('ORICA ' + orica_type + ' ' + str(block_size))
+    plt.figure();
+    plt.plot(y[high_sk].T)
+    plt.title('ORICA ' + orica_type + ' ' + str(block_size))
+
+    # s_der = np.zeros(w.shape)
+    # for i in range(s_der.shape[0]):
+    #     for j, adj in enumerate(adj_graph):
+    #         if i in adj:
+    #             # print(i, j, adj_graph[j])
+    #             s_der[i, j] = 1. / len(adj) * m.T[i, j]
+    #
+    # s_mat = np.zeros(w.shape)
+    # for i, comp in enumerate(s_mat):
+    #     for j, adj in enumerate(adj_graph):
+    #         s_mat[i, j] = 1. / len(adj) * np.sum(a[i, adj])
+    #
+    # B = np.sum(a) - np.sum(s_mat)
+    # dS = 2. * B * (m.T - s_der)
+    # dS_T = dS.T
