@@ -472,14 +472,35 @@ def convolve_templates_spiketrains(spike_id, spike_bin, template, modulation=Fal
     recordings = np.zeros((n_elec, n_samples))
     # recordings_test = np.zeros((n_elec, n_samples))
     if not modulation:
+        spike_pos = np.where(spike_bin == 1)[0]
+        amp_mod = np.ones_like(spike_pos)
         if len(template.shape) == 3:
             njitt = template.shape[0]
             rand_idx = np.random.randint(njitt)
-            for el in range(n_elec):
-                recordings[el] += np.convolve(spike_bin, template[rand_idx, el], mode='same')
+            print 'rand_idx: ', rand_idx
+            temp_jitt = template[rand_idx]
+            print 'No modulation'
+            for pos, spos in enumerate(spike_pos):
+                if spos-len_spike//2 >= 0 and spos-len_spike//2+len_spike <= n_samples:
+                    recordings[:, spos-len_spike//2:spos-len_spike//2+len_spike] +=  amp_mod[pos] * temp_jitt
+                elif spos-len_spike//2 < 0:
+                    diff = -(spos-len_spike//2)
+                    recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * temp_jitt[:, diff:]
+                else:
+                    diff = n_samples-(spos - len_spike // 2)
+                    recordings[:, spos - len_spike // 2:] += amp_mod[pos] * temp_jitt[:, :diff]
         else:
-            for el in range(n_elec):
-                recordings[el] += np.convolve(spike_bin, template[el], mode='same')
+            print 'No modulation'
+            for pos, spos in enumerate(spike_pos):
+                if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
+                    recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += amp_mod[
+                                                                                                  pos] * template
+                elif spos - len_spike // 2 < 0:
+                    diff = -(spos - len_spike // 2)
+                    recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * template[:, diff:]
+                else:
+                    diff = n_samples - (spos - len_spike // 2)
+                    recordings[:, spos - len_spike // 2:] += amp_mod[pos] * template[:, :diff]
     else:
         assert amp_mod is not None
         spike_pos = np.where(spike_bin == 1)[0]
@@ -628,7 +649,7 @@ if __name__ == '__main__':
         pos = sys.argv.index('-sync')
         sync = sys.argv[pos + 1]
     else:
-        sync = 0.5
+        sync = 0
     if '-noise' in sys.argv:
         pos = sys.argv.index('-noise')
         noise = sys.argv[pos+1]
@@ -639,7 +660,7 @@ if __name__ == '__main__':
         noiselev = sys.argv[pos+1]
         print noiselev
     else:
-        noiselev = 2.6
+        noiselev = 10.
     if '-nofilter' in sys.argv:
         filter=False
     else:

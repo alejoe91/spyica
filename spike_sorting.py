@@ -1385,7 +1385,8 @@ def plot_mixing(mixing, mea_pos, mea_dim):
 
     for n in range(n_sources):
         ax_w = fig_t.add_subplot(rows, cols, n+1)
-        plot_weight(mixing[n], mea_dim, ax=ax_w)
+        mix = mixing[n]/np.ptp(mixing[n])
+        plot_weight(mix, mea_dim, ax=ax_w)
 
     return fig_t
 

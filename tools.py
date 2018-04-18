@@ -1387,7 +1387,7 @@ def evaluate_spiketrains(gtst, sst, t_jitt = 1*pq.ms, overlapping=False, paralle
     return counts, put_pairs, cc_matr
 
 
-def evaluate_PI(gt_mix, ic_mix):
+def evaluate_PI(ic_unmix, gt_mix):
     '''
 
     Parameters
@@ -1399,11 +1399,11 @@ def evaluate_PI(gt_mix, ic_mix):
     -------
 
     '''
-    C = np.matmul(ic_mix, gt_mix.T)
-    N = gt_mix.shape[0]
+    H = np.matmul(ic_unmix, gt_mix)
+    C = H**2
+    N = np.min([gt_mix.shape[0], ic_unmix.shape[0]])
 
-    PI = 1./(N-1) * (N - 0.5*(np.sum(np.max(C**2, axis=1)/np.sum(C**2, axis=1))
-                              + np.sum(np.max(C**2, axis=0)/np.sum(C**2, axis=0))))
+    PI = (N - 0.5*(np.sum(np.max(C, axis=0)/np.sum(C, axis=0)) + np.sum(np.max(C, axis=1)/np.sum(C, axis=1))))/(N-1)
 
     return PI, C
 

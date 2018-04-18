@@ -106,7 +106,7 @@ class ORICA():
             icasphere = np.eye(nChs)
 
         lambda_k = np.zeros((1, blockSizeICA))
-        minNonStatIdx =[]
+        minNonStatIdx = []
         counter       = 1
 
         if self.adaptiveFF['profile'] == 'cooling' or  self.adaptiveFF['profile'] == 'constant':
@@ -132,10 +132,12 @@ class ORICA():
         else: # Online RLS Whitening
             if verbose:
                 print('Use online whitening method.')
+
         # whiten / sphere the data
         data_w = np.matmul(icasphere, data)
 
         self.state = State(icaweights, icasphere, lambda_k, minNonStatIdx, counter, Rn, nonStatIdx, kurtsign)
+        self.icasphere_1 = la.inv(self.state.icasphere)
 
         #########
         # ORICA #
@@ -175,7 +177,7 @@ class ORICA():
         # output weights and sphere matrices
         self.sphere = self.state.icasphere
         self.unmixing = np.matmul(self.state.icaweights, self.sphere)
-        self.mixing = la.pinv(np.matmul(self.unmixing, self.sphere)).T
+        self.mixing = la.pinv(self.unmixing).T
         self.y = np.matmul(self.unmixing, data)
 
 
@@ -408,6 +410,7 @@ class ORICA_W():
         data_w = np.matmul(icasphere, data)
 
         self.state = State(icaweights, icasphere, lambda_k, minNonStatIdx, counter, Rn, nonStatIdx, kurtsign)
+        self.icasphere_1 = la.inv(self.state.icasphere)
 
         #########
         # ORICA #
@@ -475,13 +478,13 @@ class ORICA_W():
                 if not np.mod(bi, block_ica):
                     try:
                         D, V = eigh(np.matmul(self.state.icaweights, self.state.icaweights.T))
+                        # diagonalize matrix (maybe every n steps)
+                        self.state.icaweights = np.matmul(np.matmul(
+                            la.solve(np.diag((np.sqrt(np.abs(D)) * np.sign(D))).T, V.T).T,
+                                      V.T), self.state.icaweights)
                     except LinAlgError:
                         raise Exception()
 
-                    # diagonalize matrix (maybe every n steps)
-                    self.state.icaweights = np.matmul(
-                        np.matmul(la.solve(np.diag((np.sqrt(np.abs(D)) * np.sign(D))).T, V.T).T,
-                                  V.T), self.state.icaweights)
                     if verbose:
                         if printflag < np.floor(10 * (it * numBlock + bi) / numPass / numBlock):
                             printflag = printflag + 1
@@ -516,28 +519,6 @@ class ORICA_W():
         QWhite = lambda_avg / (1-lambda_avg) + np.trace(np.matmul(v, v.T)) / nPts
         self.state.icasphere = 1 / lambda_avg * (self.state.icasphere - np.matmul(v, v.T) / nPts
                                             / QWhite * self.state.icasphere)
-
-    def computeSmoothingFactor(self):
-        A = self.state.icaweights
-        W = self.state.icaweights.T
-        M = self.state.icasphere
-        s_der = np.zeros(W.shape)
-        for i in range(s_der.shape[0]):
-            for j, adj in enumerate(adj_graph):
-                if i in adj:
-                    # print(i, j, adj_graph[j])
-                    s_der[i, j] = 1. / len(adj) * M.T[i, j]
-
-        s_mat = np.zeros(W.shape)
-        for i, comp in enumerate(s_mat):
-            for j, adj in enumerate(adj_graph):
-                s_mat[i, j] = 1. / len(adj) * np.sum(A[i, adj])
-
-        B = np.sum(A) - np.sum(s_mat)
-        dS = 2. * B * (M.T - s_der)
-        dS_T = dS.T
-
-        return dS_T
 
     def genCoolingFF(self, t, gamma, lambda_0):
         lambda_ = lambda_0 / (t ** gamma)
@@ -668,6 +649,7 @@ class ORICA_A():
         data_w = np.matmul(icasphere, data)
 
         self.state = State(icaweights, icasphere, lambda_k, minNonStatIdx, counter, Rn, nonStatIdx, kurtsign)
+        self.icasphere_1 = la.inv(self.state.icasphere)
 
         #########
         # ORICA #
@@ -723,7 +705,7 @@ class ORICA_A():
 
                 # # Compute smoothing factor
                 if self.mu != 0:
-                    dS = self.computeSmoothingFactor()
+                    dS = computeSmoothingFactor(A, self.icasphere_1, self.neighbor_mask)
                     u = np.matmul(v, f.T) + self.mu * dS
                 else:
                     u = np.matmul(v, f.T)
@@ -780,22 +762,20 @@ class ORICA_A():
 
     def computeSmoothingFactor(self):
         A = self.state.icaweights
-        W = self.state.icaweights.T
-        M = self.state.icasphere
+        M_1 = self.icasphere_1
         s_der = np.zeros(W.shape)
         for i in range(s_der.shape[0]):
             for j, adj in enumerate(adj_graph):
                 if i in adj:
                     # print(i, j, adj_graph[j])
-                    s_der[i, j] = 1. / len(adj) * M.T[i, j]
+                    s_der[i, j] = 1. / len(adj) * M_1[i, j]
 
         s_mat = np.zeros(W.shape)
         for i, comp in enumerate(s_mat):
             for j, adj in enumerate(adj_graph):
                 s_mat[i, j] = 1. / len(adj) * np.sum(A[i, adj])
 
-        B = np.sum(A) - np.sum(s_mat)
-        dS = 2. * B * (M.T - s_der)
+        dS = 2. * (A - s_mat) * (M_1 - s_der)
         dS_T = dS.T
 
         return dS_T
@@ -888,9 +868,23 @@ class ORICA_W_block():
         self.adjacency = adjacency
         self.mu = mu
         self.eta = eta
+        self.smooth_count = 0
+        self.S = []
 
         if weights is None:
             weights = np.eye(nChs)
+
+        if self.mu != 0:
+            self.neighbor_masks = []
+            for i in range(weights.shape[0]):
+                for j in range(weights.shape[1]):
+                    mask = []
+                    for k in range(weights.shape[0]):
+                        for l in range(weights.shape[1]):
+                            for n in adjacency[l]:
+                                if l == i or n == i:
+                                    mask.append([i, j, k, l, n])
+                    self.neighbor_masks.append(mask)
 
         ##############################
         # initialize state variables #
@@ -930,6 +924,7 @@ class ORICA_W_block():
         data_w = np.matmul(icasphere, data)
 
         self.state = State(icaweights, icasphere, lambda_k, minNonStatIdx, counter, Rn, nonStatIdx, kurtsign)
+        self.icasphere_1 = la.inv(self.state.icasphere)
 
         #########
         # ORICA #
@@ -947,6 +942,8 @@ class ORICA_W_block():
             elif self.adaptiveFF['profile'] == 'adaptive':
                 print('Running ORICA with adaptive forgetting factor...')
         t_start = time.time()
+
+        self.glob_count = 0
 
         for it in range(numPass):
             for bi in range(numBlock):
@@ -974,6 +971,7 @@ class ORICA_W_block():
         self.unmixing = np.matmul(self.state.icaweights, self.sphere)
         self.mixing = la.pinv(np.matmul(self.unmixing, self.sphere)).T
         self.y = np.matmul(self.unmixing, data)
+        self.S = np.array(self.S)
 
 
     def dynamicWhitening(self, blockdata, dataRange):
@@ -1001,6 +999,8 @@ class ORICA_W_block():
         # initialize
         nChs, nPts = blockdata.shape
         f = np.zeros((nChs, nPts))
+        A = self.state.icaweights.T
+        W = self.state.icaweights
         # compute source activation using previous weight matrix
         y = np.matmul(self.state.icaweights, blockdata)
         v = blockdata
@@ -1040,40 +1040,36 @@ class ORICA_W_block():
             ratioOfNormRn = self.state.nonStatIdx / self.state.minNonStatIdx
             self.state.lambda_k = self.genAdaptiveFF(dataRange, self.state.lambda_k, ratioOfNormRn)
 
-        # update weight matrix using online recursive ICA block update rule
-        # MADE CHANGES HERE
-        # lambda_prod = np.prod((1.-self.state.lambda_k))
+
         coeff = np.append(1, self.state.lambda_k) * np.append(1,np.cumprod(1 - self.state.lambda_k[::-1]))[::-1]
 
-        # u = [np.matmul(np.expand_dims(f[:,i], axis=1), np.expand_dims(v[:,i], axis=1).T)
-        #      for i in range(len(self.state.lambda_k))]
-        # lambda_int = np.array([np.prod([(1 - self.state.lambda_k[k + l])
-        #               for l in range(1, len(self.state.lambda_k) - k)]) for k in range(len(self.state.lambda_k))])
-        # curr_state = self.state.icaweights
-
         # Compute smoothing factor
-        # TODO change smoothing
         if self.mu != 0:
-            smoothing_matrix = np.zeros(self.state.icaweights.shape)
-            for i, comp in enumerate(smoothing_matrix):
-                for adj in self.adjacency:
-                    smoothing_matrix[i] = 1./len(adj)*np.sum(self.state.icaweights[i, adj])
+            self.smooth_count += 1
 
-            self.state.icaweights = lambda_prod * ((self.state.icaweights -
-                                                   np.matmul(np.matmul(np.matmul(y,  np.diag(self.state.lambda_k / Q)),
-                                                             f.T), self.state.icaweights)) +
-                                                   self.mu*(self.state.icaweights - smoothing_matrix)) #- eta*())
+            # if not np.mod(self.smooth_count, 20):
+                # A_cap = np.matmul(self.icasphere_1, A)
+            dS, S = computeSmoothingFactor(W, self.adjacency)
+            self.smooth_count = 0
+            self.glob_count += 1
+            self.S.append(S)
+            # dS = np.zeros(A.shape)
+                # print(self.glob_count)
+                # if self.glob_count == 50:
+                #     raise Exception()
+            # else:
+            #     dS = np.zeros(A.shape)
+            self.state.icaweights = coeff[0] * self.state.icaweights + np.matmul(np.matmul(f, np.diag(coeff[1:])), v.T)\
+                                    + self.mu * np.sum(coeff[1:]) * dS #np.sum(np.einsum('i,jk->ijk', coeff, dS), axis=0)
+
+            # if not np.mod(self.smooth_count, 100):
+            #     ica_coeff = coeff[0] * self.state.icaweights + np.matmul(np.matmul(f, np.diag(coeff[1:])), v.T)
+            #     smooth_coeff = self.mu * np.sum(coeff[1:]) * dS
+            #     print('ICA ', np.max(ica_coeff), np.min(ica_coeff))
+            #     print('Smooth ', np.max(smooth_coeff), np.min(smooth_coeff))
+
         else:
-            # TODO sum over matrices
-            # self.state.icaweights = lambda_prod * self.state.icaweights + \
-            #                         np.sum([self.state.lambda_k[k] *
-            #                                 np.prod([(1 - self.state.lambda_k[k + l])
-            #                                          for l in range(1, len(self.state.lambda_k)-k)]) *
-            #                                 u[k] for k in range(len(self.state.lambda_k))], axis=0)
-            # self.state.icaweights = lambda_prod * self.state.icaweights + \
-            #                         np.sum([self.state.lambda_k[k] * lambda_int[k] * u[k] for k in range(len(lambda_int))], axis=0)
             self.state.icaweights = coeff[0] * self.state.icaweights + np.matmul(np.matmul(f, np.diag(coeff[1:])), v.T)
-
 
         # orthogonalize weight matrix
         try:
@@ -1177,6 +1173,18 @@ class ORICA_A_block():
         if weights is None:
             weights = np.eye(nChs)
 
+        if self.mu != 0:
+            self.neighbor_masks = []
+            for i in range(weights.shape[0]):
+                for j in range(weights.shape[1]):
+                    mask = []
+                    for k in range(weights.shape[0]):
+                        for l in range(weights.shape[1]):
+                            for n in adjacency[l]:
+                                if l == i or n == i:
+                                    mask.append([i, j, k, l, n])
+                    self.neighbor_masks.append(mask)
+
         ##############################
         # initialize state variables #
         ##############################
@@ -1215,6 +1223,7 @@ class ORICA_A_block():
         data_w = np.matmul(icasphere, data)
 
         self.state = State(icaweights, icasphere, lambda_k, minNonStatIdx, counter, Rn, nonStatIdx, kurtsign)
+        self.icasphere_1 = la.inv(self.state.icasphere)
 
         #########
         # ORICA #
@@ -1286,7 +1295,6 @@ class ORICA_A_block():
         # initialize
         nChs, nPts = blockdata.shape
         f = np.zeros((nChs, nPts))
-        #TODO? compute source activation using previous weight matrix to keep orthogonality?
         A = self.state.icaweights
         W = self.state.icaweights.T
         y = np.matmul(W, blockdata)
@@ -1327,34 +1335,8 @@ class ORICA_A_block():
             ratioOfNormRn = self.state.nonStatIdx / self.state.minNonStatIdx
             self.state.lambda_k = self.genAdaptiveFF(dataRange, self.state.lambda_k, ratioOfNormRn)
 
-        # update weight matrix using online recursive ICA block update rule
-        # MADE CHANGES HERE
-        # lambda_prod = np.prod((1.-self.state.lambda_k))
-        # u = np.einsum('ij,kj->jik', v,f)
-        # # u = np.array([np.matmul(np.expand_dims(v[:,i], axis=1), np.expand_dims(f[:,i], axis=1).T)
-        # #                         for i in range(len(self.state.lambda_k))])
-        # lambda_int = np.array([np.prod([(1 - self.state.lambda_k[k + l])
-        #               for l in range(1, len(self.state.lambda_k) - k)]) for k in range(len(self.state.lambda_k))])
-        # curr_state = self.state.icaweights
-        coeff = np.append(1, self.state.lambda_k) * np.append(1, np.cumprod(1 - self.state.lambda_k[::-1]))[::-1]
 
-        # # Compute smoothing factor
-        # # TODO change smoothing
-        # if self.mu != 0:
-        #     smoothing_matrix = np.zeros(self.state.icaweights.shape)
-        #     for i, comp in enumerate(smoothing_matrix):
-        #         for adj in self.adjacency:
-        #             smoothing_matrix[i] = 1./len(adj)*np.sum(self.state.icaweights[i, adj])
-        #
-        #     self.state.icaweights = lambda_prod * ((self.state.icaweights -
-        #                                            np.matmul(np.matmul(np.matmul(y,  np.diag(self.state.lambda_k / Q)),
-        #                                                      f.T), self.state.icaweights)) +
-        #                                            self.mu*(self.state.icaweights - smoothing_matrix)) #- eta*())
-        # else:
-        # self.state.icaweights = lambda_prod * self.state.icaweights + \
-        #                         np.sum([self.state.lambda_k[k] * lambda_int[k] * u[k] for k in range(len(lambda_int))], axis=0)
-        # self.state.icaweights = lambda_prod * self.state.icaweights + np.einsum('i,ijk->jk',
-        #                                                                         self.state.lambda_k*lambda_int, u)
+        coeff = np.append(1, self.state.lambda_k) * np.append(1, np.cumprod(1 - self.state.lambda_k[::-1]))[::-1]
         self.state.icaweights = coeff[0] * self.state.icaweights + np.matmul(np.matmul(v, np.diag(coeff[1:])), f.T)
 
         # orthogonalize weight matrix
@@ -1387,6 +1369,53 @@ class ORICA_A_block():
 
         return lambda_
 
+
+def computeSmoothingFactor(W, adj_graph, mode='L1', simple=True, return_smoothing=True):
+    '''
+
+    Parameters
+    ----------
+    A
+    M_1
+
+    Returns
+    -------
+
+    '''
+    # # i-j is cicle over W, k-l is cycle over A for each w_ij
+    # t1 = time.time()
+    # s_der = np.zeros(A.shape)
+    # for i in range(s_der.shape[0]):
+    #     for j in range(s_der.shape[0]):
+    #         for k in range(s_der.shape[0]):
+    #             for l in range(s_der.shape[1]):
+    #                 for n in adj_graph[l]:
+    #                     if l == i or n == i:
+    #                         s_der[i, j] += (A[k, l] - A[k, n])*M_1[k, j]
+    # print (time.time() - t1)
+    #
+    #
+    #
+    # dS = np.zeros(A.shape)
+    # for nn in masks:
+    #     for (i, j, k, l, n) in nn:
+    #         dS[i, j] += (A[k, l] - A[k, n])*M_1[k, j]
+
+    s_mat = np.zeros(W.shape)
+    for i, comp in enumerate(s_mat):
+        for j, adj in enumerate(adj_graph):
+            s_mat[i, j] = 1. / len(adj) * np.sum(W[i, adj])
+
+    dS = 2. * (W - s_mat) #* (M_1 - s_der)
+    S = []
+    if return_smoothing:
+        for i, comp in enumerate(s_mat):
+            ss = 0
+            for j, adj in enumerate(adj_graph):
+                ss += 1. / len(adj) * np.sum([(W[i,j] - W[i, ad])**2 for ad in adj])
+            S.append(ss)
+
+    return dS, S
 
 
 
@@ -1597,19 +1626,3 @@ if __name__ == '__main__':
     plt.figure();
     plt.plot(y[high_sk].T)
     plt.title('ORICA ' + orica_type + ' ' + str(block_size))
-
-    # s_der = np.zeros(w.shape)
-    # for i in range(s_der.shape[0]):
-    #     for j, adj in enumerate(adj_graph):
-    #         if i in adj:
-    #             # print(i, j, adj_graph[j])
-    #             s_der[i, j] = 1. / len(adj) * m.T[i, j]
-    #
-    # s_mat = np.zeros(w.shape)
-    # for i, comp in enumerate(s_mat):
-    #     for j, adj in enumerate(adj_graph):
-    #         s_mat[i, j] = 1. / len(adj) * np.sum(a[i, adj])
-    #
-    # B = np.sum(a) - np.sum(s_mat)
-    # dS = 2. * B * (m.T - s_der)
-    # dS_T = dS.T
