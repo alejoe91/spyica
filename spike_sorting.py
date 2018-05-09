@@ -29,7 +29,7 @@ root_folder = os.getcwd()
 class SpikeSorter:
     def __init__(self, save=False, rec_folder=None, alg=None, lag=None, gfmode=None, duration=None,
                  tstart=None, tstop=None, run_ss=None, plot_figures=True, merge_spikes=False, mu=0, eta=0,
-                 npass=1, block=2000, clust_feat='pca', keepall=True):
+                 npass=1, block=1000, feat='pca', clust='mog', keepall=True):
         self.rec_folder = rec_folder
         self.rec_name = os.path.split(rec_folder)[-1]
         if self.rec_name == '':
@@ -50,15 +50,15 @@ class SpikeSorter:
         self.merge_spikes = merge_spikes
 
         self.model = alg
-        self.corr_thresh = 0.2
+        self.kurt_thresh = 1
         self.skew_thresh = 0.1
         self.root = os.getcwd()
         sys.path.append(self.root)
 
-        self.clustering = 'mog'
-        self.threshold = 4
+        self.clustering = clust
+        self.threshold = 5
         self.keep = keepall
-        self.feat = clust_feat
+        self.feat = feat
         self.npass = npass
         self.clock = block
 
@@ -231,10 +231,8 @@ class SpikeSorter:
                 print 'ICA Finished. Elapsed time: ', time.time() - t_start, ' sec.'
 
                 # clean sources based on skewness and correlation
-                spike_sources, self.source_idx, self.correlated_pairs, self.corr, self.mi = clean_sources(self.s_ica,
-                                                                                      corr_thresh=self.corr_thresh,
-                                                                                      skew_thresh=self.skew_thresh,
-                                                                                      remove_correlated=False)
+                spike_sources, self.source_idx = clean_sources(self.s_ica, kurt_thresh=self.kurt_thresh,
+                                                               skew_thresh=self.skew_thresh)
 
                 self.cleaned_sources_ica = spike_sources
                 self.cleaned_A_ica = self.A_ica[self.source_idx]
@@ -324,6 +322,7 @@ class SpikeSorter:
                     self.sst = self.spike_trains
 
                 elif self.clustering == 'mountain':
+                    self.mountain_sig = 'rec'
                     sys.path.append(join(self.root, 'spikesorter_files', 'mountainsort_files'))
                     import mlpy
                     from shutil import copyfile
@@ -338,23 +337,46 @@ class SpikeSorter:
                         rec_name = rec_name[-1]
                     self.mountain_full_path = join(self.mountain_folder, rec_name)
 
-                    # write data file
-                    filename = join(self.mountain_folder, 'raw.mda')
-                    mlpy.writemda32(self.cleaned_sources_ica, filename)
-                    print 'saving ', filename
+                    if self.mountain_sig == 'ic':
 
-                    # # write csv probe file
-                    # with open(join(self.mountain_folder, 'geom.csv'), 'w') as f:
-                    #     for pos in self.mea_pos:
-                    #         f.write(str(pos[1]))
-                    #         f.write(',')
-                    #         f.write(str(pos[2]))
-                    #         f.write('\n')
+                        # write data file
+                        filename = join(self.mountain_folder, 'raw.mda')
+                        mlpy.writemda32(self.cleaned_sources_ica, filename)
+                        print 'saving ', filename
 
-                    # write param file
-                    detect_threshold = None
-                    params = {'samplerate': int(self.fs.rescale('Hz').magnitude), 'detect_sign': -1,
-                              'adjacency_radius': 0}
+
+                        # # write csv probe file
+                        # with open(join(self.mountain_folder, 'geom.csv'), 'w') as f:
+                        #     for pos in self.mea_pos:
+                        #         f.write(str(pos[1]))
+                        #         f.write(',')
+                        #         f.write(str(pos[2]))
+                        #         f.write('\n')
+
+                        # write param file
+                        detect_threshold = None
+                        params = {'samplerate': int(self.fs.rescale('Hz').magnitude), 'detect_sign': 0,
+                                  'adjacency_radius': 0}
+                    elif self.mountain_sig == 'rec':
+                        # write data file
+                        filename = join(self.mountain_folder, 'raw.mda')
+                        self.reconstructed = np.matmul(self.cleaned_A_ica.T, self.cleaned_sources_ica)
+                        mlpy.writemda32(self.reconstructed, filename)
+                        print 'saving ', filename
+
+                        # write csv probe file
+                        with open(join(self.mountain_folder, 'geom.csv'), 'w') as f:
+                            for pos in self.mea_pos:
+                                f.write(str(pos[1]))
+                                f.write(',')
+                                f.write(str(pos[2]))
+                                f.write('\n')
+
+                        # write param file
+                        detect_threshold = None
+                        radius = 50
+                        params = {'samplerate': int(self.fs.rescale('Hz').magnitude), 'detect_sign': 0,
+                                  'adjacency_radius': radius}
 
                     with open(join(self.mountain_folder, 'params.json'), 'w') as f:
                         json.dump(params, f)
@@ -369,15 +391,27 @@ class SpikeSorter:
                     import subprocess
                     os.chdir(self.mountain_folder)
                     try:
-                        if self.curate:
-                            subprocess.check_output(['mlp-run', 'mountainsort3.mlp', 'sort', '--raw=raw.mda',
-                                                     '--firings_out=firings.mda',
-                                                     '--_params=params.json',
-                                                     '--curate=true'])
-                        else:
-                            subprocess.check_output(['mlp-run', 'mountainsort3.mlp', 'sort', '--raw=raw.mda',
-                                                     '--firings_out=firings.mda',
-                                                     '--_params=params.json'])
+                        if self.mountain_sig == 'ic':
+                            if self.curate:
+                                subprocess.check_output(['mlp-run', 'mountainsort3.mlp', 'sort', '--raw=raw.mda',
+                                                         '--firings_out=firings.mda',
+                                                         '--_params=params.json',
+                                                         '--curate=true'])
+                            else:
+                                subprocess.check_output(['mlp-run', 'mountainsort3.mlp', 'sort', '--raw=raw.mda',
+                                                         '--firings_out=firings.mda',
+                                                         '--_params=params.json'])
+                        elif self.mountain_sig == 'rec':
+                            if self.curate:
+                                subprocess.check_output(['mlp-run', 'mountainsort3.mlp', 'sort', '--raw=raw.mda',
+                                                         '--geom=geom.csv', '--firings_out=firings.mda',
+                                                         '--_params=params.json',
+                                                         '--curate=true'])
+                            else:
+                                subprocess.check_output(['mlp-run', 'mountainsort3.mlp', 'sort', '--raw=raw.mda',
+                                                         '--geom=geom.csv', '--firings_out=firings.mda',
+                                                         '--_params=params.json'])
+                                
                         self.processing_time = time.time() - t_start_proc
                         print 'Elapsed time: ', self.processing_time
                     except subprocess.CalledProcessError as e:
@@ -414,6 +448,8 @@ class SpikeSorter:
                     self.spike_amps = [sp.annotations['ica_amp'] for sp in self.spike_trains_rej]
                     self.sst = self.spike_trains_rej
 
+                print 'Number of spike trains after clustering: ', len(self.spike_trains)
+
                 if 'ica_source' in self.sst[0].annotations.keys():
                     self.independent_spike_idx = [s.annotations['ica_source'] for s in self.sst]
 
@@ -423,7 +459,7 @@ class SpikeSorter:
                 self.W_spike_sources = self.cleaned_W_ica[self.independent_spike_idx]
 
                 if 'ica_wf' not in self.sst[0].annotations.keys():
-                    extract_wf(self.sst, self.ica_spike_sources, self.recordings, self.times)
+                    extract_wf(self.sst, self.ica_spike_sources, self.recordings, self.times, self.fs)
 
                 self.processing_time = time.time() - t_start_proc
                 print 'Elapsed time: ', self.processing_time
@@ -462,7 +498,7 @@ class SpikeSorter:
                 self.s_orica, self.A_orica, self.W_orica = orICA.instICA(self.recordings,
                                                                          n_chunks=n_chunks, chunk_size=chunk_size,
                                                                          mu=mu, adjacency_graph=adj_graph,
-                                                                         numpass=npass, block_size=block)
+                                                                         numpass=npass, block_size=block, mode='W_block')
 
                 self.avg_smoothing = []
                 for i in range(self.recordings.shape[0]):
@@ -470,10 +506,9 @@ class SpikeSorter:
                                                               for j, adj in enumerate(adj_graph)]))
 
                 # clean sources based on skewness and correlation
-                spike_sources, self.source_idx, self.correlated_pairs, self.corr, self.mi = clean_sources(self.s_orica,
-                                                                                      corr_thresh=self.corr_thresh,
-                                                                                      skew_thresh=self.skew_thresh,
-                                                                                      remove_correlated=False)
+                spike_sources, self.source_idx = clean_sources(self.s_orica,
+                                                               kusrt_thresh=self.kurt_thresh,
+                                                               skew_thresh=self.skew_thresh)
 
                 self.cleaned_sources_orica = spike_sources
                 self.cleaned_A_orica = self.A_orica[self.source_idx]
@@ -494,8 +529,6 @@ class SpikeSorter:
                         cluster_spike_amplitudes(self.detected_spikes, metric='cal',
                                                  alg=self.clustering,
                                                  features=self.feat, keep_all=self.keep)
-
-                    print 'Number of spike trains after clustering: ', len(self.spike_trains)
 
                     self.spike_trains_rej, self.independent_spike_idx, self.dup = \
                         reject_duplicate_spiketrains(self.spike_trains)
@@ -655,8 +688,6 @@ class SpikeSorter:
                             spiketrain = neo.SpikeTrain(spike_times, t_start=0 * pq.s, t_stop=self.gtst[0].t_stop)
                             spiketrain.annotate(ica_source=int(np.unique(self.firings[0, idx]))-1)
                             self.spike_trains.append(spiketrain)
-                    #TODO extract waveforms
-                    print 'Number of spike trains after clustering: ', len(self.spike_trains)
                     self.sst = self.spike_trains
                 else:
                     self.spike_trains = detect_and_align(spike_sources, self.fs, self.recordings,
@@ -668,6 +699,7 @@ class SpikeSorter:
                     self.spike_amps = [sp.annotations['ica_amp'] for sp in self.spike_trains]
                     self.sst = self.spike_trains
 
+                print 'Number of spike trains after clustering: ', len(self.spike_trains)
                 self.processing_time = time.time() - t_start_proc
 
                 if 'ica_source' in self.sst[0].annotations.keys():
@@ -678,6 +710,9 @@ class SpikeSorter:
                 self.orA_spike_sources = self.cleaned_A_orica[self.independent_spike_idx]
                 self.orW_spike_sources = self.cleaned_W_orica[self.independent_spike_idx]
                 self.orica_smoothing_spike_sources = self.cleaned_smoothing[self.independent_spike_idx]
+
+                if 'ica_wf' not in self.sst[0].annotations.keys():
+                    extract_wf(self.sst, self.orica_spike_sources, self.recordings, self.times, self.fs)
 
                 print 'Average smoothing: ', np.mean(self.orica_smoothing_spike_sources), ' mu=', mu
                 print 'Elapsed time: ', time.time() - t_start
@@ -708,10 +743,8 @@ class SpikeSorter:
                 self.s_orica, self.A_orica, self.W_orica = orICA.cICAemb(self.recordings)
 
                 # clean sources based on skewness and correlation
-                spike_sources, self.source_idx, self.correlated_pairs, self.corr, self.mi = clean_sources(self.s_orica,
-                                                                                      corr_thresh=self.corr_thresh,
-                                                                                      skew_thresh=self.skew_thresh,
-                                                                                      remove_correlated=False)
+                spike_sources, self.source_idx = clean_sources(self.s_orica, kurt_thresh=self.kurt_thresh,
+                                                               skew_thresh=self.skew_thresh)
 
 
                 self.cleaned_sources_orica = spike_sources
@@ -1454,7 +1487,7 @@ def templates_weights(templates, weights, mea_pos, mea_dim, mea_pitch, pairs=Non
         ax_w = fig_t.add_subplot(gs_w[n])
 
         plot_mea_recording(templates[n], mea_pos, mea_pitch, ax=ax_t)
-        if pairs !=None:
+        if pairs is not None:
             if pairs[n, 0] != -1:
                 plot_weight(weights[pairs[n, 1]], mea_dim, ax=ax_w)
             else:
@@ -1561,16 +1594,25 @@ if __name__ == '__main__':
         pos = sys.argv.index('-block')
         block = int(sys.argv[pos + 1])
     else:
-        block = 2000
+        block = 1000
+    if '-feat' in sys.argv:
+        pos = sys.argv.index('-feat')
+        feat = sys.argv[pos + 1]
+    else:
+        feat = 'pca'
     if '-clust' in sys.argv:
         pos = sys.argv.index('-clust')
         clust = sys.argv[pos + 1]
     else:
-        clust = 'pca'
+        clust = 'mog'
     if '-nokeep' in sys.argv:
         keepall = False
     else:
         keepall = True
+    if '-nosave' in sys.argv:
+        save = False
+    else:
+        save = True
 
     if len(sys.argv) == 1:
         print 'Arguments: \n   -r recording filename\n   -mod ICA - cICA - orica - corica - klusta' \
@@ -1580,7 +1622,7 @@ if __name__ == '__main__':
     elif '-r' not in sys.argv:
         raise AttributeError('Provide model folder for data')
     else:
-        sps = SpikeSorter(save=True, rec_folder=rec_folder, alg=mod, lag=lag, gfmode=gfmode, duration=dur,
+        sps = SpikeSorter(save=False, rec_folder=rec_folder, alg=mod, lag=lag, gfmode=gfmode, duration=dur,
                           tstart=tstart, tstop=tstop, run_ss=spikesort, plot_figures=plot_figures,
-                          merge_spikes=merge_spikes, mu=mu, eta=eta, npass=npass, block=block, clust_feat=clust,
-                          keepall=keepall)
+                          merge_spikes=merge_spikes, mu=mu, eta=eta, npass=npass, block=block, feat=feat,
+                          clust=clust, keepall=keepall)

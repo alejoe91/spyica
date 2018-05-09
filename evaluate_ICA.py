@@ -24,7 +24,8 @@ import ICA as ica
 import orICA as orica
 
 root_folder = os.getcwd()
-
+plt.ion()
+plt.show()
 
 def matcorr(x, y, rmmean=False, weighting=None):
     m, n = x.shape
@@ -132,6 +133,11 @@ if __name__ == '__main__':
         npass = int(sys.argv[pos + 1])
     else:
         npass = 1
+    if '-reg' in sys.argv:
+        pos = sys.argv.index('-reg')
+        reg = int(sys.argv[pos + 1])
+    else:
+        reg = 'L2'
     if '-noplot' in sys.argv:
         plot_fig = False
     else:
@@ -140,7 +146,7 @@ if __name__ == '__main__':
     if len(sys.argv) == 1:
         print 'Evaluate ICA for spike sorting:\n   -r recording folder\n   -mod orica-ica\n   \nblock block size' \
               '\n   -ff constant-cooling\n   -mu smoothing\n   -lambda lambda_0' \
-              '\n   -oricamod  original - A - W - A_block - W_block\n   -npass numpass'
+              '\n   -oricamod  original - A - W - A_block - W_block\n   -npass numpass\n'
         # raise Exception('Indicate recording folder -r')
         folder = 'recordings/recording_eeg_16chan_ica.mat'
         block_size = 10
@@ -196,7 +202,7 @@ if __name__ == '__main__':
         elif orica_type == 'W_block':
             ori = orica.ORICA_W_block(recordings, sphering='offline', forgetfac=ff, lambda_0=lambda_val,
                                       mu=mu, verbose=True, numpass=npass, block_white=block_size, block_ica=block_size,
-                                      adjacency=adj_graph)
+                                      adjacency=adj_graph, regmode=reg)
         elif orica_type == 'A_block':
             ori = orica.ORICA_A_block(recordings, sphering='offline', forgetfac=ff, lambda_0=lambda_val,
                                       mu=mu, verbose=True, numpass=npass, block_white=block_size, block_ica=block_size,
@@ -262,12 +268,21 @@ if __name__ == '__main__':
         sorted_a = np.matmul(np.diag(np.sign(correlation[sorted_corr_idx])), a[high_sk][sorted_idx]).T
         sorted_mixing = mixing[:, np.sort(idx_truth)]
         sorted_y = np.matmul(np.diag(np.sign(correlation[sorted_corr_idx])), y[high_sk][sorted_idx])
+        sorted_y_true = sources[np.sort(idx_truth)]
+        average_corr = np.mean(np.abs(correlation[sorted_corr_idx]))
 
         PI, C = evaluate_PI(sorted_a.T, sorted_mixing)
 
         if plot_fig:
             plot_mixing(sorted_mixing.T, mea_pos, mea_dim)
             plot_mixing(sorted_a.T, mea_pos, mea_dim)
+
+            # fig = plt.figure()
+            # ax = fig.add_subplot(111)
+            # colors = plt.rcParams['axes.color_cycle']
+            # for i, (true_y, ica_y) in enumerate(zip(sorted_y_true, sorted_y)):
+            #     ax.plot(true_y/np.max(np.abs(true_y)), alpha=0.3, color=colors[int(np.mod(i, len(colors)))])
+            #     ax.plot(ica_y/np.max(np.abs(ica_y)), alpha=0.8, color=colors[int(np.mod(i, len(colors)))])
 
     else:
         a_t = np.zeros(a.shape)
@@ -289,6 +304,7 @@ if __name__ == '__main__':
         sorted_a = np.matmul(np.diag(np.sign(correlation[sorted_corr_idx])), a[sorted_idx]).T
         sorted_mixing = mixing[:, np.sort(idx_truth)]
         sorted_y = np.matmul(np.diag(np.sign(correlation[sorted_corr_idx])), y[sorted_idx])
+        average_corr = np.mean(np.abs(correlation[sorted_corr_idx]))
 
         PI, C = evaluate_PI(w, mixing)
 
@@ -298,6 +314,8 @@ if __name__ == '__main__':
 
     print 'Average smoothing: ', np.mean(smooth)
     print 'Performance index: ', PI
+    print 'Average correlation: ', average_corr
+
 
     cc_sources = np.dot(sources, y.T)
     cc_mixing = np.dot(mixing.T, a.T)

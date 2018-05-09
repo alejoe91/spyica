@@ -567,7 +567,7 @@ def integrate_sources(sources):
     return integ_source
 
 
-def clean_sources(sources, corr_thresh=0.7, skew_thresh=0.5, remove_correlated=True):
+def clean_sources(sources, kurt_thresh=0.7, skew_thresh=0.5, remove_correlated=True):
     '''
 
     Parameters
@@ -588,51 +588,53 @@ def clean_sources(sources, corr_thresh=0.7, skew_thresh=0.5, remove_correlated=T
 
     high_sk = np.where(np.abs(sk) >= skew_thresh)[0]
     low_sk = np.where(np.abs(sk) < skew_thresh)[0]
-    sources_sp = sources[high_sk]
-    sources_disc = sources[low_sk]
+    high_ku = np.where(ku >= kurt_thresh)[0]
+    low_ku = np.where(ku < kurt_thresh)[0]
 
-    # compute correlation matrix
-    corr = np.zeros((sources_sp.shape[0], sources_sp.shape[0]))
-    mi = np.zeros((sources_sp.shape[0], sources_sp.shape[0]))
-    max_lag = np.zeros((sources_sp.shape[0], sources_sp.shape[0]))
-    for i in range(sources_sp.shape[0]):
-        s_i = sources_sp[i]
-        for j in range(i + 1, sources_sp.shape[0]):
-            s_j = sources_sp[j]
-            cmat = crosscorrelation(s_i, s_j, maxlag=50)
-            # cmat = ss.correlate(s_i, s_j)
-            corr[i, j] = np.max(np.abs(cmat))
-            max_lag[i, j] = np.argmax(np.abs(cmat))
-            mi[i, j] = calc_MI(s_i, s_j, bins=100)
+    idxs = np.unique(np.concatenate((high_sk, high_ku)))
 
-    sources_keep, sources_discard = sources[high_sk], sources[low_sk]
+    # sources_sp = sources[high_sk]
+    # sources_disc = sources[low_sk]
+    # # compute correlation matrix
+    # corr = np.zeros((sources_sp.shape[0], sources_sp.shape[0]))
+    # mi = np.zeros((sources_sp.shape[0], sources_sp.shape[0]))
+    # max_lag = np.zeros((sources_sp.shape[0], sources_sp.shape[0]))
+    # for i in range(sources_sp.shape[0]):
+    #     s_i = sources_sp[i]
+    #     for j in range(i + 1, sources_sp.shape[0]):
+    #         s_j = sources_sp[j]
+    #         cmat = crosscorrelation(s_i, s_j, maxlag=50)
+    #         # cmat = ss.correlate(s_i, s_j)
+    #         corr[i, j] = np.max(np.abs(cmat))
+    #         max_lag[i, j] = np.argmax(np.abs(cmat))
+    #         mi[i, j] = calc_MI(s_i, s_j, bins=100)
 
-    corr_idx = np.argwhere(corr > corr_thresh)
-    sk_keep = stat.skew(sources_keep, axis=1)
+    # sources_keep = sources[idxs]
+    # corr_idx = np.argwhere(corr > corr_thresh)
+    # sk_keep = stat.skew(sources_keep, axis=1)
 
-    # remove smaller skewnesses
-    remove_ic = []
-    for idxs in corr_idx:
-        sk_pair = sk_keep[idxs]
-        remove_ic.append(idxs[np.argmin(np.abs(sk_pair))])
-    remove_ic = np.array(remove_ic)
+    # # remove smaller skewnesses
+    # remove_ic = []
+    # for idxs in corr_idx:
+    #     sk_pair = sk_keep[idxs]
+    #     remove_ic.append(idxs[np.argmin(np.abs(sk_pair))])
+    # remove_ic = np.array(remove_ic)
+    #
+    # if len(remove_ic) != 0 and remove_correlated:
+    #     mask = np.array([True] * len(sources_keep))
+    #     mask[remove_ic] = False
+    #
+    #     spike_sources = sources_keep[mask]
+    #     source_idx = high_sk[mask]
+    # else:
+    # source_idx = high_sk
 
-    if len(remove_ic) != 0 and remove_correlated:
-        mask = np.array([True] * len(sources_keep))
-        mask[remove_ic] = False
-
-        spike_sources = sources_keep[mask]
-        source_idx = high_sk[mask]
-    else:
-        spike_sources = sources_keep
-        source_idx = high_sk
-
-
+    spike_sources = sources[idxs]
     sk_sp = stat.skew(spike_sources, axis=1)
     # invert sources with positive skewness
     spike_sources[sk_sp > 0] = -spike_sources[sk_sp > 0]
 
-    return spike_sources, source_idx, corr_idx, corr, mi
+    return spike_sources, idxs #, corr_idx, corr, mi
 
 
 
@@ -1072,11 +1074,13 @@ def cluster_spike_amplitudes(sst, metric='cal', min_sihlo=0.8, min_cal=150, max_
                                     reduced_amps.append(amps[idxs])
                                     keep_id.append(idxs)
                             else:
+                                # for PCA the sign might be inverted
                                 if alg == 'kmeans':
-                                    highest_clust = np.argmin(kmeans.cluster_centers_)
+                                    highest_clust = np.argmax(np.abs(kmeans.cluster_centers_))
                                 elif alg == 'mog':
-                                    highest_clust = np.argmin(gmm.means_)
+                                    highest_clust = np.argmax(np.abs(gmm.means_))
                                 idxs = np.where(labels == highest_clust)[0]
+                                red_spikes = sst[i][idxs]
                                 red_spikes.annotations = copy(sst[i].annotations)
                                 if 'ica_amp' in red_spikes.annotations:
                                     red_spikes.annotate(ica_amp=red_spikes.annotations['ica_amp'][idxs])
@@ -1084,8 +1088,8 @@ def cluster_spike_amplitudes(sst, metric='cal', min_sihlo=0.8, min_cal=150, max_
                                     red_spikes.annotate(ica_wf=red_spikes.annotations['ica_wf'][idxs])
                                 red_spikes.annotate(ica_source=i)
                                 reduced_sst.append(red_spikes)
-                                reduced_amps.append(amps[highest_idx])
-                                keep_id.append(highest_idx)
+                                reduced_amps.append(amps[idxs])
+                                keep_id.append(idxs)
                     silhos[i] = silho
                     cal_hars[i] = cal_har
                 else:
@@ -1140,6 +1144,7 @@ def evaluate_spiketrains(gtst, sst, t_jitt = 1*pq.ms, overlapping=False, paralle
     import neo
     import multiprocessing
     from elephant.spike_train_correlation import cch, corrcoef
+    from scipy.optimize import linear_sum_assignment
 
     if nprocesses is None:
         num_cores = len(gtst)
@@ -1217,6 +1222,18 @@ def evaluate_spiketrains(gtst, sst, t_jitt = 1*pq.ms, overlapping=False, paralle
                 if i == sorted_rows.shape[1] - 1:
                     # print 'Out of spiketrains'
                     put_pairs[pp] = np.array([-1, -1], dtype=int)
+
+    # cc2 = cc_matr ** 2
+    # col_ind, row_ind = linear_sum_assignment(-cc2)
+    # put_pairs_ = -1 * np.ones((len(gtst), 2))
+    # for i in range(len(gtst)):
+    #     if i in col_ind:
+    #         idx = np.where(i == col_ind)
+    #         if cc2[col_ind[idx], row_ind[idx]] < 0.1:
+    #             put_pairs_[i] = [col_ind[idx], row_ind[idx]]
+    #
+    #
+    # raise Exception()
 
     [gt.annotate(paired=False) for gt in gtst]
     [st.annotate(paired=False) for st in sst]

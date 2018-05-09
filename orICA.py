@@ -705,7 +705,7 @@ class ORICA_A():
 
                 # # Compute smoothing factor
                 if self.mu != 0:
-                    dS = computeSmoothingFactor(A, self.icasphere_1, self.neighbor_mask)
+                    dS = computeRegularizationFactor(A, self.icasphere_1, self.neighbor_mask)
                     u = np.matmul(v, f.T) + self.mu * dS
                 else:
                     u = np.matmul(v, f.T)
@@ -760,25 +760,6 @@ class ORICA_A():
         self.state.icasphere = 1 / lambda_avg * (self.state.icasphere - np.matmul(v, v.T) / nPts
                                             / QWhite * self.state.icasphere)
 
-    def computeSmoothingFactor(self):
-        A = self.state.icaweights
-        M_1 = self.icasphere_1
-        s_der = np.zeros(W.shape)
-        for i in range(s_der.shape[0]):
-            for j, adj in enumerate(adj_graph):
-                if i in adj:
-                    # print(i, j, adj_graph[j])
-                    s_der[i, j] = 1. / len(adj) * M_1[i, j]
-
-        s_mat = np.zeros(W.shape)
-        for i, comp in enumerate(s_mat):
-            for j, adj in enumerate(adj_graph):
-                s_mat[i, j] = 1. / len(adj) * np.sum(A[i, adj])
-
-        dS = 2. * (A - s_mat) * (M_1 - s_der)
-        dS_T = dS.T
-
-        return dS_T
 
     def genCoolingFF(self, t, gamma, lambda_0):
         lambda_ = lambda_0 / (t ** gamma)
@@ -803,7 +784,7 @@ class ORICA_A():
 class ORICA_W_block():
     def __init__(self, data, numpass=1, weights=None, sphering='offline', lambda_0=0.995, block_white=8, block_ica=8, nsub=0,
                  forgetfac='cooling', localstat=np.inf, ffdecayrate=0.6, evalconverg=True, verbose=False, mu=0, eta=0,
-                 adjacency=None):
+                 adjacency=None, regmode='L1'):
         '''
 
         Parameters
@@ -869,7 +850,10 @@ class ORICA_W_block():
         self.mu = mu
         self.eta = eta
         self.smooth_count = 0
-        self.S = []
+        self.reg = []
+        self.regmode = regmode
+        self.lambdas = np.array([])
+
 
         if weights is None:
             weights = np.eye(nChs)
@@ -971,7 +955,7 @@ class ORICA_W_block():
         self.unmixing = np.matmul(self.state.icaweights, self.sphere)
         self.mixing = la.pinv(np.matmul(self.unmixing, self.sphere)).T
         self.y = np.matmul(self.unmixing, data)
-        self.S = np.array(self.S)
+        self.reg = np.array(self.reg)
 
 
     def dynamicWhitening(self, blockdata, dataRange):
@@ -1040,6 +1024,8 @@ class ORICA_W_block():
             ratioOfNormRn = self.state.nonStatIdx / self.state.minNonStatIdx
             self.state.lambda_k = self.genAdaptiveFF(dataRange, self.state.lambda_k, ratioOfNormRn)
 
+        self.lambdas = np.concatenate((self.lambdas, self.state.lambda_k))
+
 
         coeff = np.append(1, self.state.lambda_k) * np.append(1,np.cumprod(1 - self.state.lambda_k[::-1]))[::-1]
 
@@ -1047,18 +1033,10 @@ class ORICA_W_block():
         if self.mu != 0:
             self.smooth_count += 1
 
-            # if not np.mod(self.smooth_count, 20):
-                # A_cap = np.matmul(self.icasphere_1, A)
-            dS, S = computeSmoothingFactor(W, self.adjacency)
+            dS, S = computeRegularizationFactor(W, M_1 = self.icasphere_1, mode='L2')
             self.smooth_count = 0
             self.glob_count += 1
-            self.S.append(S)
-            # dS = np.zeros(A.shape)
-                # print(self.glob_count)
-                # if self.glob_count == 50:
-                #     raise Exception()
-            # else:
-            #     dS = np.zeros(A.shape)
+            self.reg.append(S)
             self.state.icaweights = coeff[0] * self.state.icaweights + np.matmul(np.matmul(f, np.diag(coeff[1:])), v.T)\
                                     + self.mu * np.sum(coeff[1:]) * dS #np.sum(np.einsum('i,jk->ijk', coeff, dS), axis=0)
 
@@ -1370,56 +1348,108 @@ class ORICA_A_block():
         return lambda_
 
 
-def computeSmoothingFactor(W, adj_graph, mode='L1', simple=True, return_smoothing=True):
+def computeRegularizationFactor(W, mode='L1', return_value=True, **kwargs):
     '''
 
     Parameters
     ----------
-    A
-    M_1
+    A:      mixing matrix
+    mode:   L1 - L2 - smooth - simple_smooth
+    return_value
+    kwargs
 
     Returns
     -------
 
     '''
-    # # i-j is cicle over W, k-l is cycle over A for each w_ij
-    # t1 = time.time()
-    # s_der = np.zeros(A.shape)
-    # for i in range(s_der.shape[0]):
-    #     for j in range(s_der.shape[0]):
-    #         for k in range(s_der.shape[0]):
-    #             for l in range(s_der.shape[1]):
-    #                 for n in adj_graph[l]:
-    #                     if l == i or n == i:
-    #                         s_der[i, j] += (A[k, l] - A[k, n])*M_1[k, j]
-    # print (time.time() - t1)
-    #
-    #
-    #
-    # dS = np.zeros(A.shape)
-    # for nn in masks:
-    #     for (i, j, k, l, n) in nn:
-    #         dS[i, j] += (A[k, l] - A[k, n])*M_1[k, j]
+    if mode == 'L1' or mode == 'L2':
+        if 'M_1' not in kwargs.keys():
+            raise Exception('Pass M_1 term for L1 or L2 norm')
+        else:
+            M_1 = kwargs['M_1']
+    elif mode == 'smooth':
+        if 'adj_graph' not in kwargs.keys():
+            raise Exception('Pass adj_graph term for smoothing')
+        else:
+            adj_graph = kwargs['adj_graph']
 
-    s_mat = np.zeros(W.shape)
-    for i, comp in enumerate(s_mat):
-        for j, adj in enumerate(adj_graph):
-            s_mat[i, j] = 1. / len(adj) * np.sum(W[i, adj])
+    # W: rows = sources, cols = measurements
+    # A_cap = M_1 * W.T: rows = sources, cols = measurements
+    # i-j is cicle over W, k-l is cycle over A_cap for each w_ij
 
-    dS = 2. * (W - s_mat) #* (M_1 - s_der)
-    S = []
-    if return_smoothing:
-        for i, comp in enumerate(s_mat):
+    if mode == 'L1':
+        A_cap = np.matmul(M_1, W.T).T
+        dS = 2 * np.matmul(np.sign(A_cap.T), M_1)
+        # A_der = np.zeros(A_cap.shape)
+        # for i in range(A_der.shape[0]):
+        #     for j in range(A_der.shape[0]):
+        #         for k in range(A_der.shape[0]):
+        #             A_der[i,j] += M_1[k,j] * np.sign(A_cap[k,i])
+        if return_value:
+            S = np.sum(A_cap)
+        # dS = A_der
+
+    elif mode == 'L2':
+        A_cap = np.matmul(M_1, W.T).T
+
+        # matrix = 2 * A_cap.T * M_1
+        dS = 2 * np.matmul(A_cap.T, M_1)
+
+        # A_der = np.zeros(A_cap.shape)
+        # for i in range(A_der.shape[0]):
+        #     for j in range(A_der.shape[0]):
+        #         for k in range(A_der.shape[0]):
+        #             A_der[i, j] += 2 * M_1[k, j] * A_cap[k, i]
+        if return_value:
+            S = np.sum(A_cap**2)
+
+
+
+    elif mode == 'smooth':
+        A_cap = np.matmul(M_1, W.T).T
+        A_der = np.zeros(A_cap.shape)
+
+        # dS = np.zeros(A.shape)
+        # for nn in masks:
+        #     for (i, j, k, l, n) in nn:
+        #         dS[i, j] += (A[k, l] - A[k, n])*M_1[k, j]
+
+        for i in range(A_der.shape[0]):
+            for j in range(A_der.shape[0]):
+                for k in range(A_der.shape[0]):
+                    for l in range(A_der.shape[1]):
+                        for n in adj_graph[l]:
+                            if l == i or n == i:
+                                A_der[i, j] += (A_cap[k, l] - A_cap[k, n])*M_1[k, j]
+        A_adj = np.zeros(W.shape)
+        S = []
+        for i, comp in enumerate(A_adj):
             ss = 0
             for j, adj in enumerate(adj_graph):
-                ss += 1. / len(adj) * np.sum([(W[i,j] - W[i, ad])**2 for ad in adj])
-            S.append(ss)
+                s_mat[i, j] = 1. / len(adj) * np.sum(A_cap[i, adj])
+                if return_value:
+                    ss += 1. / len(adj) * np.sum([(A_cap[i, j] - A_cap[i, ad]) ** 2 for ad in adj])
+                S.append(ss)
+        dS = 2. * (A_cap - A_adj)  * (M_1 - A_der)
+
+    elif smooth == 'smooth_simple':
+        W_mat = np.zeros(W.shape)
+        S = []
+        for i, comp in enumerate(W_mat):
+            ss = 0
+            for j, adj in enumerate(adj_graph):
+                W_mat[i, j] = 1. / len(adj) * np.sum(W[i, adj])
+                if return_value:
+                    ss += 1. / len(adj) * np.sum([(W[i, j] - W[i, ad]) ** 2 for ad in adj])
+                S.append(ss)
+        dS = 2. * (W - s_mat)
 
     return dS, S
 
 
 
-def instICA(X, n_comp='all', n_chunks=1, chunk_size=None, numpass=1, block_size=2000, adjacency_graph=None, mu=0):
+def instICA(X, n_comp='all', n_chunks=1, chunk_size=None, numpass=1, block_size=2000, mode='original',
+            adjacency_graph=None, mu=0):
     """Performs instantaneous ICA.
 
     Parameters
@@ -1467,8 +1497,17 @@ def instICA(X, n_comp='all', n_chunks=1, chunk_size=None, numpass=1, block_size=
     else:
         X_reduced = X
 
-    orica = ORICA(X_reduced, sphering='offline', verbose=True, numpass=numpass,
-                  block_white=block_size, block_ica=block_size, adjacency=adjacency_graph, mu=mu)
+    if mode == 'original':
+        orica = ORICA(X_reduced, sphering='offline', verbose=True, numpass=numpass,
+                      block_white=block_size, block_ica=block_size, adjacency=adjacency_graph, mu=mu)
+    elif mode == 'W_block':
+        orica = ORICA(X_reduced, sphering='offline', verbose=True, numpass=numpass,
+                      block_white=block_size, block_ica=block_size, adjacency=adjacency_graph, mu=mu)
+    elif mode == 'A_block':
+        orica = ORICA(X_reduced, sphering='offline', verbose=True, numpass=numpass,
+                      block_white=block_size, block_ica=block_size, adjacency=adjacency_graph, mu=mu)
+    else:
+        raise Exception('Unrecognized orica type')
 
     sources = orica.y
     A = orica.mixing
