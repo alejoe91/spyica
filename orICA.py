@@ -27,7 +27,7 @@ class State():
 class ORICA():
     def __init__(self, data, numpass=1, weights=None, sphering='offline', lambda_0=0.995, block_white=8, block_ica=8, nsub=0,
                  forgetfac='cooling', localstat=np.inf, ffdecayrate=0.6, evalconverg=True, verbose=False, mu=0, eta=0,
-                 adjacency=None):
+                 adjacency=None, whiten=True, ortho=True):
         '''
 
         Parameters
@@ -74,6 +74,8 @@ class ORICA():
 
         nChs, nPts = data.shape
         self.count = 0
+        self.whiten = whiten
+        self.ortho = ortho
 
         numPass = numpass
         verbose = verbose
@@ -134,7 +136,12 @@ class ORICA():
                 print('Use online whitening method.')
 
         # whiten / sphere the data
-        data_w = np.matmul(icasphere, data)
+        if self.whiten:
+            data_w = np.matmul(icasphere, data)
+        else:
+            print('Initializing weights to sphering matrix')
+            data_w = data
+            icaweights = icasphere
 
         self.state = State(icaweights, icasphere, lambda_k, minNonStatIdx, counter, Rn, nonStatIdx, kurtsign)
         self.icasphere_1 = la.inv(self.state.icasphere)
@@ -176,7 +183,10 @@ class ORICA():
 
         # output weights and sphere matrices
         self.sphere = self.state.icasphere
-        self.unmixing = np.matmul(self.state.icaweights, self.sphere)
+        if self.whiten:
+            self.unmixing = np.matmul(self.state.icaweights, self.sphere)
+        else:
+            self.unmixing = self.state.icaweights
         self.mixing = la.pinv(self.unmixing).T
         self.y = np.matmul(self.unmixing, data)
 
@@ -270,14 +280,15 @@ class ORICA():
 
 
         # orthogonalize weight matrix
-        try:
-            D, V = eigh(np.matmul(self.state.icaweights, self.state.icaweights.T))
-        except LinAlgError:
-            raise Exception()
+        if self.ortho:
+            try:
+                D, V = eigh(np.matmul(self.state.icaweights, self.state.icaweights.T))
+            except LinAlgError:
+                raise Exception()
 
-        # curr_state = self.state.icaweights
-        self.state.icaweights = np.matmul(np.matmul(la.solve(np.diag((np.sqrt(np.abs(D)) * np.sign(D))).T, V.T).T,
-                                                    V.T), self.state.icaweights)
+            # curr_state = self.state.icaweights
+            self.state.icaweights = np.matmul(np.matmul(la.solve(np.diag((np.sqrt(np.abs(D)) * np.sign(D))).T, V.T).T,
+                                                        V.T), self.state.icaweights)
 
     def genCoolingFF(self, t, gamma, lambda_0):
         lambda_ = lambda_0 / (t ** gamma)

@@ -22,7 +22,7 @@ import spiketrain_generator as stg
 from tools import *
 from neuroplot import *
 
-root_folder = os.getcwd()
+root_folder = os.path.dirname(os.path.realpath(sys.argv[0]))
 
 #TODO add bursting events
 #TODO drifting units
@@ -297,6 +297,8 @@ class GenST:
         elif self.spike_modulation == 'noise-all':
             print 'Noisy modulation at electrode level'
             for st in self.spgen.all_spiketrains:
+                self.n_isi = 0
+                self.exp = 0
                 amp, cons = ISI_amplitude_modulation(st, n_el=n_elec, mrand=self.mrand, sdrand=self.sdrand,
                                                      n_spikes=0, exp=self.exp, mem_ISI=self.mem_isi)
                 self.amp_mod.append(amp)
@@ -364,12 +366,25 @@ class GenST:
                 for st, spike_bin in enumerate(spike_matrix):
                     print 'Convolving with spike ', st, ' out of ', spike_matrix.shape[0]
                     if self.spike_modulation == 'none':
+                        # reset random seed to keep sampling of jitter spike same
+                        seed = np.random.randint(10000)
+                        np.random.seed(seed)
                         self.recordings += convolve_templates_spiketrains(st, spike_bin, self.templates[st])
+                        np.random.seed(seed)
                         gt_spikes.append(convolve_single_template(st, spike_bin,
                                                                   self.templates[st, :, np.argmax(self.mixing[st])]))
                     else:
+                        seed = np.random.randint(10000)
+                        np.random.seed(seed)
                         self.recordings += convolve_templates_spiketrains(st, spike_bin, self.templates[st], modulation=True,
                                                                           amp_mod=self.amp_mod[st])
+                        np.random.seed(seed)
+                        # print self.amp_mod[0].shape
+                        gt_spikes.append(convolve_single_template(st, spike_bin,
+                                                                  self.templates[st, :, np.argmax(self.mixing[st])],
+                                                                                   modulation=True,
+                                                                                   amp_mod=self.amp_mod[st][:,
+                                                                                   np.argmax(self.mixing[st])]))
             else:
                 if self.spike_modulation == 'none':
                     results = [pool.apply_async(convolve_templates_spiketrains, (spike_bin, self.templates[st],))
@@ -436,7 +451,7 @@ class GenST:
                         + str(self.f_inh).replace(' ','') + '_modulation_' + self.spike_modulation \
                         + '_' + time.strftime("%d-%m-%Y:%H:%M") + '_' + str(self.seed)
 
-        rec_dir = join(root_folder, 'recordings', 'convolution', 'gtica')
+        rec_dir = join(root_folder, 'recordings', 'convolution', 'gtica', self.electrode_name)
         self.rec_path = join(rec_dir, self.rec_name)
         os.makedirs(self.rec_path)
         # Save meta_info yaml
@@ -515,7 +530,7 @@ def interpolate_template(temp, mea_pos, mea_dim, x_shift=0, y_shift=0):
     return np.squeeze(np.array(t_shift)).swapaxes(0,1)
 
 
-def convolve_single_template(spike_id, spike_bin, template):
+def convolve_single_template(spike_id, spike_bin, template, modulation=False, amp_mod=None):
     if len(template.shape) == 2:
         len_spike = template.shape[1]
     else:
@@ -527,17 +542,29 @@ def convolve_single_template(spike_id, spike_bin, template):
     if len(template.shape) == 2:
         njitt = template.shape[0]
         rand_idx = np.random.randint(njitt)
+        print 'rand_idx: ', rand_idx
         temp_jitt = template[rand_idx]
-        print 'No modulation'
-        for pos, spos in enumerate(spike_pos):
-            if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
-                gt_source[spos - len_spike // 2:spos - len_spike // 2 + len_spike] +=  temp_jitt
-            elif spos - len_spike // 2 < 0:
-                diff = -(spos - len_spike // 2)
-                gt_source[:spos - len_spike // 2 + len_spike] += temp_jitt[diff:]
-            else:
-                diff = n_samples - (spos - len_spike // 2)
-                gt_source[spos - len_spike // 2:] += temp_jitt[:diff]
+        if not modulation:
+            for pos, spos in enumerate(spike_pos):
+                if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
+                    gt_source[spos - len_spike // 2:spos - len_spike // 2 + len_spike] +=  temp_jitt
+                elif spos - len_spike // 2 < 0:
+                    diff = -(spos - len_spike // 2)
+                    gt_source[:spos - len_spike // 2 + len_spike] += temp_jitt[diff:]
+                else:
+                    diff = n_samples - (spos - len_spike // 2)
+                    gt_source[spos - len_spike // 2:] += temp_jitt[:diff]
+        else:
+            print 'Electrode-template modulation'
+            for pos, spos in enumerate(spike_pos):
+                if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
+                    gt_source[spos - len_spike // 2:spos - len_spike // 2 + len_spike] += amp_mod[pos]*temp_jitt
+                elif spos - len_spike // 2 < 0:
+                    diff = -(spos - len_spike // 2)
+                    gt_source[:spos - len_spike // 2 + len_spike] += amp_mod[pos]*temp_jitt[diff:]
+                else:
+                    diff = n_samples - (spos - len_spike // 2)
+                    gt_source[spos - len_spike // 2:] += amp_mod[pos]*temp_jitt[:diff]
     else:
         print 'No modulation'
         for pos, spos in enumerate(spike_pos):
@@ -563,6 +590,7 @@ def convolve_templates_spiketrains(spike_id, spike_bin, template, modulation=Fal
         len_spike = template.shape[1]
     n_samples = len(spike_bin)
     recordings = np.zeros((n_elec, n_samples))
+
     # recordings_test = np.zeros((n_elec, n_samples))
     if not modulation:
         spike_pos = np.where(spike_bin == 1)[0]
@@ -780,8 +808,8 @@ if __name__ == '__main__':
     print modulation
 
     if len(sys.argv) == 1:
-        print 'Arguments: \n   -f filename\n   -dur duration\n   -freq sampling frequency (in kHz)\n   ' \
-              '-ncells number of cells\n' \
+        print 'Arguments: \n   -f filename\n   -dur duration\n   -freq sampling frequency (in kHz)\n' \
+              '   -ncells number of cells\n' \
               '   -pexc proportion of exc cells\n   -bx x boundaries [xmin,xmax]\n   -minamp minimum amplitude\n' \
               '   -noise uncorrelated-correlated\n   -noiselev level of rms noise in uV\n   -dur duration\n' \
               '   -fexc freq exc neurons\n   -finh freq inh neurons\n   -nofilter if filter or not\n' \
@@ -791,6 +819,7 @@ if __name__ == '__main__':
     elif '-f' not in sys.argv:
         raise AttributeError('Provide model folder for data')
     else:
+        print modulation
         gs = GenST(save=True, spike_folder=spike_folder, fs=freq, n_cells=ncells, p_exc=pexc, duration=dur,
                    bound_x=bx, min_amp=minamp, noise_mode=noise, noise_level=noiselev, f_exc=fexc, f_inh=finh,
                    filter=filter, over=over, sync=sync, modulation=modulation, min_dist=mindist, 

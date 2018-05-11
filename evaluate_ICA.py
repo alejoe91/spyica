@@ -7,7 +7,6 @@ import elephant
 import scipy.signal as ss
 import scipy.stats as stats
 import scipy.io as sio
-from scipy.optimize import linear_sum_assignment
 import quantities as pq
 import json
 import yaml
@@ -15,6 +14,7 @@ import time
 import h5py
 import ipdb
 import mne
+import pandas as pd
 
 from tools import *
 from neuroplot import *
@@ -27,46 +27,8 @@ root_folder = os.getcwd()
 plt.ion()
 plt.show()
 
-def matcorr(x, y, rmmean=False, weighting=None):
-    m, n = x.shape
-    p, q = y.shape
-    m = np.min([m,p])
+save_results = True
 
-    if m != n or  p!=q:
-        print 'matcorr(): Matrices are not square: using max abs corr method (2).'
-        method = 2
-
-    if n != q:
-      raise Exception('Rows in the two input matrices must be the same length.')
-
-    if rmmean:
-      x = x - np.mean(x, axis=1) # optionally remove means
-      y = y - np.mean(y, axis=1)
-
-    dx = np.sum(x**2, axis=1)
-    dy = np.sum(y**2, axis=1)
-    dx[np.where(dx==0)] = 1
-    dy[np.where(dy==0)] = 1
-    # raise Exception()
-    corrs = np.matmul(x, y.T)/np.sqrt(dx[:, np.newaxis]*dy[np.newaxis, :])
-
-    if weighting != None:
-        if any(corrs.shape != weighting.shape):
-            print 'matcorr(): weighting matrix size must match that of corrs'
-        else:
-            corrs = corrs * weighting
-
-    cc = np.abs(corrs)
-
-    # Performs Hungarian algorithm matching
-    col_ind, row_ind = linear_sum_assignment(-cc.T)
-
-    idx = np.argsort(-cc[row_ind, col_ind])
-    corr = corrs[row_ind, col_ind][idx]
-    indy = np.arange(m)[idx]
-    indx = row_ind[idx]
-
-    return corr, indx, indy, corrs
 
 def plot_topo_eeg(a, pos):
     '''
@@ -94,6 +56,7 @@ def plot_topo_eeg(a, pos):
 
     return fig_t
 
+
 if __name__ == '__main__':
     if '-r' in sys.argv:
         pos = sys.argv.index('-r')
@@ -112,15 +75,11 @@ if __name__ == '__main__':
         pos = sys.argv.index('-ff')
         ff = sys.argv[pos + 1]
     else:
-        ff = 'constant'
-    if '-mu' in sys.argv:
-        pos = sys.argv.index('-mu')
-        mu = float(sys.argv[pos + 1])
-    else:
-        mu = 0
+        ff = 'cooling'
+
     if '-lambda' in sys.argv:
         pos = sys.argv.index('-lambda')
-        lambda_val = float(sys.argv[pos + 1])
+        lambda_val = sys.argv[pos + 1]
     else:
         lambda_val = 0.995
     if '-oricamod' in sys.argv:
@@ -138,10 +97,27 @@ if __name__ == '__main__':
         reg = int(sys.argv[pos + 1])
     else:
         reg = 'L2'
+    if '-mu' in sys.argv:
+        pos = sys.argv.index('-mu')
+        mu = float(sys.argv[pos + 1])
+    else:
+        mu = 0
+    if '-nowhiten' in sys.argv:
+        whiten = False
+    else:
+        whiten = True
+    if '-noortho' in sys.argv:
+        ortho = False
+    else:
+        ortho = True
+
     if '-noplot' in sys.argv:
         plot_fig = False
     else:
         plot_fig = True
+
+    folder = os.path.abspath(folder)
+    print folder
 
     if len(sys.argv) == 1:
         print 'Evaluate ICA for spike sorting:\n   -r recording folder\n   -mod orica-ica\n   \nblock block size' \
@@ -167,6 +143,8 @@ if __name__ == '__main__':
         mixing = np.load(join(folder, 'mixing.npy')).T
         sources = np.load(join(folder, 'sources.npy'))
         adj_graph = extract_adjacency(mea_pos, np.max(mea_pitch) + 5)
+
+        n_sources = sources.shape[0]
     else:
         mat_contents = sio.loadmat(folder)
         recordings = mat_contents['recordings']
@@ -178,19 +156,22 @@ if __name__ == '__main__':
         mea_dim = [4, 4]
         adj_graph = extract_adjacency(mea_pos, 0.06)
 
+        n_sources = sources.shape[0]
+
 
     orica_type = oricamod # original - W - A -  W_block - A_block
-    if ff == 'constant':
+    # if ff == 'constant':
+    if lambda_val == 'N':
         lambda_val = 1. / recordings.shape[1] # 0.995
     else:
-        lambda_val = lambda_val
+        lambda_val = float(lambda_val)
 
     t_start = time.time()
     if mod == 'orica':
         if orica_type == 'original':
             ori = orica.ORICA(recordings, sphering='offline', forgetfac=ff, lambda_0=lambda_val,
                               mu=mu, verbose=True, numpass=npass, block_white=block_size, block_ica=block_size,
-                              adjacency=adj_graph)
+                              adjacency=adj_graph, whiten=whiten, ortho=ortho)
         elif orica_type == 'W':
             ori = orica.ORICA_W(recordings, sphering='offline', forgetfac=ff, lambda_0=lambda_val,
                                 mu=mu, verbose=True, numpass=1, block_white=block_size, block_ica=block_size,
@@ -216,6 +197,7 @@ if __name__ == '__main__':
         a = ori.mixing
 
     elif mod == 'ica':
+        oricamod = '-'
         y, a, w = ica.instICA(recordings)
 
     proc_time = time.time() - t_start
@@ -245,17 +227,16 @@ if __name__ == '__main__':
            smooth[i] = (np.mean([1. / len(adj) * np.sum(a_t[i, j] - a_t[i, adj]) ** 2
                                                  for j, adj in enumerate(adj_graph)]))
 
-
-        print 'High skewness: ', np.abs(sk[high_sk])
-        print 'Average high skewness: ', np.mean(np.abs(sk[high_sk]))
-        print 'Number high skewness: ', len(sk[high_sk])
-
-        print 'High kurtosis: ', ku[high_ku]
-        print 'Average high kurtosis: ', np.mean(ku[high_ku])
-        print 'Number high kurtosis: ', len(ku[high_ku])
-
-        # print 'Smoothing: ', smooth[high_sk]
-        print 'Average smoothing: ', np.mean(smooth[high_sk])
+        # print 'High skewness: ', np.abs(sk[high_sk])
+        # print 'Average high skewness: ', np.mean(np.abs(sk[high_sk]))
+        # print 'Number high skewness: ', len(sk[high_sk])
+        #
+        # print 'High kurtosis: ', ku[high_ku]
+        # print 'Average high kurtosis: ', np.mean(ku[high_ku])
+        # print 'Number high kurtosis: ', len(ku[high_ku])
+        #
+        # # print 'Smoothing: ', smooth[high_sk]
+        # print 'Average smoothing: ', np.mean(smooth[high_sk])
 
         # if plot_fig:
         #     plot_mixing(mixing.T, mea_pos, mea_dim)
@@ -271,7 +252,10 @@ if __name__ == '__main__':
         sorted_y_true = sources[np.sort(idx_truth)]
         average_corr = np.mean(np.abs(correlation[sorted_corr_idx]))
 
-        PI, C = evaluate_PI(sorted_a.T, sorted_mixing)
+        # PI, C = evaluate_PI(sorted_a.T, sorted_mixing)
+        mix_CC_mean, sources_CC_mean, \
+        corr_cross_mix, corr_cross_sources = evaluate_sum_CC(sorted_a.T, sorted_mixing.T, sorted_y_true, sorted_y,
+                                                             n_sources)
 
         if plot_fig:
             plot_mixing(sorted_mixing.T, mea_pos, mea_dim)
@@ -304,21 +288,42 @@ if __name__ == '__main__':
         sorted_a = np.matmul(np.diag(np.sign(correlation[sorted_corr_idx])), a[sorted_idx]).T
         sorted_mixing = mixing[:, np.sort(idx_truth)]
         sorted_y = np.matmul(np.diag(np.sign(correlation[sorted_corr_idx])), y[sorted_idx])
+        sorted_y_true = sources[np.sort(idx_truth)]
         average_corr = np.mean(np.abs(correlation[sorted_corr_idx]))
 
-        PI, C = evaluate_PI(w, mixing)
+        # PI, C = evaluate_PI(w, mixing)
+        mix_CC_mean, sources_CC_mean, \
+        corr_cross_mix, corr_cross_sources = evaluate_sum_CC(sorted_a.T, sorted_mixing.T, sorted_y_true, sorted_y,
+                                                             n_sources)
 
         if plot_fig:
             plot_topo_eeg(mixing.T, mea_pos)
             plot_topo_eeg(sorted_a.T, mea_pos)
 
-    print 'Average smoothing: ', np.mean(smooth)
-    print 'Performance index: ', PI
-    print 'Average correlation: ', average_corr
+    # print 'Average smoothing: ', np.mean(smooth)
+    # print 'Performance index: ', PI
+    # print 'Average correlation: ', average_corr
+    print 'Normalized cumulative correlation - mixing: ', mix_CC_mean
+    print 'Normalized cumulative correlation - sources: ', sources_CC_mean
 
+    # cc_sources = np.dot(sources, y.T)
+    # cc_mixing = np.dot(mixing.T, a.T)
 
-    cc_sources = np.dot(sources, y.T)
-    cc_mixing = np.dot(mixing.T, a.T)
+    if save_results and 'eeg' not in folder:
+        if not os.path.isfile(join(folder, 'results.csv')):
+            df = pd.DataFrame({'mu': [mu], 'numpass': [npass], 'reg': [reg], 'oricamode': [oricamod], 'mod': [mod],
+                               'block': [block_size], 'ff': [ff], 'lambda': [lambda_val], 'time': proc_time,
+                               'CC_mix': [mix_CC_mean], 'CC_source': [sources_CC_mean]})
+            with open(join(folder, 'results.csv'), 'w') as f:
+                df.to_csv(f)
+        else:
+            with open(join(folder, 'results.csv'), 'r') as f:
+                new_index = len(pd.read_csv(f))
+            with open(join(folder, 'results.csv'), 'a') as f:
+                df = pd.DataFrame({'mu': [mu], 'numpass': [npass], 'reg': [reg], 'oricamode': [oricamod], 'mod': [mod],
+                                   'block': [block_size], 'ff': [ff], 'lambda': [lambda_val], 'time': proc_time,
+                                   'CC_mix': [mix_CC_mean], 'CC_source': [sources_CC_mean]}, index=[new_index])
+                df.to_csv(f, header=False)
 
     plt.ion()
     plt.show()

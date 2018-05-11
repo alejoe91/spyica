@@ -782,7 +782,7 @@ def ISI_amplitude_modulation(st, n_el=1, mrand=1, sdrand=0.05, n_spikes=1, exp=0
             for i, sp in enumerate(st):
                 amp_mod.append(sdrand * np.random.randn(n_el) + mrand)
 
-    return amp_mod, cons
+    return np.array(amp_mod), cons
 
 def cluster_spike_amplitudes(sst, metric='cal', min_sihlo=0.8, min_cal=150, max_clusters=4,
                              alg='kmeans', features='amp', ncomp=3, keep_all=False):
@@ -1403,6 +1403,49 @@ def evaluate_spiketrains(gtst, sst, t_jitt = 1*pq.ms, overlapping=False, paralle
 
     return counts, put_pairs, cc_matr
 
+def matcorr(x, y, rmmean=False, weighting=None):
+    from scipy.optimize import linear_sum_assignment
+
+    m, n = x.shape
+    p, q = y.shape
+    m = np.min([m,p])
+
+    if m != n or  p!=q:
+        print 'matcorr(): Matrices are not square: using max abs corr method (2).'
+        method = 2
+
+    if n != q:
+      raise Exception('Rows in the two input matrices must be the same length.')
+
+    if rmmean:
+      x = x - np.mean(x, axis=1) # optionally remove means
+      y = y - np.mean(y, axis=1)
+
+    dx = np.sum(x**2, axis=1)
+    dy = np.sum(y**2, axis=1)
+    dx[np.where(dx==0)] = 1
+    dy[np.where(dy==0)] = 1
+    # raise Exception()
+    corrs = np.matmul(x, y.T)/np.sqrt(dx[:, np.newaxis]*dy[np.newaxis, :])
+
+    if weighting != None:
+        if any(corrs.shape != weighting.shape):
+            print 'matcorr(): weighting matrix size must match that of corrs'
+        else:
+            corrs = corrs * weighting
+
+    cc = np.abs(corrs)
+
+    # Performs Hungarian algorithm matching
+    col_ind, row_ind = linear_sum_assignment(-cc.T)
+
+    idx = np.argsort(-cc[row_ind, col_ind])
+    corr = corrs[row_ind, col_ind][idx]
+    indy = np.arange(m)[idx]
+    indx = row_ind[idx]
+
+    return corr, indx, indy, corrs
+
 
 def evaluate_PI(ic_unmix, gt_mix):
     '''
@@ -1423,6 +1466,40 @@ def evaluate_PI(ic_unmix, gt_mix):
     PI = (N - 0.5*(np.sum(np.max(C, axis=0)/np.sum(C, axis=0)) + np.sum(np.max(C, axis=1)/np.sum(C, axis=1))))/(N-1)
 
     return PI, C
+
+
+def evaluate_sum_CC(ic_mix, gt_mix, ic_sources, gt_sources, n_sources): # ):
+    '''
+
+    Parameters
+    ----------
+    ic_unmix
+    gt_mix
+    ic_source
+    gt_source
+
+    Returns
+    -------
+
+    '''
+    correlation, idx_truth, idx_, corr_m = matcorr(gt_mix, ic_mix)
+    correlation, idx_truth, idx_, corr_s = matcorr(gt_sources, ic_sources)
+
+    # corr_mix = np.corrcoef(ic_mix, gt_mix)
+    # corr_sources = np.corrcoef(ic_sources, gt_sources)
+    #
+    # id_sources = ic_mix.shape[0]
+    #
+    # corr_cross_mix = corr_mix[id_sources:, :id_sources] ** 2
+    # corr_cross_sources = corr_sources[id_sources:, :id_sources] ** 2
+    corr_cross_mix = corr_m**2
+    corr_cross_sources = corr_s**2
+
+    mix_CC_mean = np.trace(corr_cross_mix)/n_sources
+    souces_CC_mean = np.trace(corr_cross_sources)/n_sources
+    raise Exception()
+
+    return mix_CC_mean, souces_CC_mean, corr_cross_mix, corr_cross_sources
 
 
 
