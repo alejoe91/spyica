@@ -18,7 +18,7 @@ else
         echo "Generating recording: ncells $n duration $dur noise $noise"
         for i in `seq 1 $nrec`;
             do
-                echo $i
+                echo $i $n
                 python ../generate_gt_ica_recordings.py -f $spikes -dur $dur -ncells $n -noiselev $noise -sync 0 -noplot -elmod
             done
         done

@@ -15,10 +15,10 @@ else
         nrec=$5
         for n in $dur
         do
-        echo "Generating recording: ncells $n duration $dur noise $noise"
+        echo "Generating recording: ncells $ncells duration $n noise $noise"
         for i in `seq 1 $nrec`;
             do
-                echo $i
+                echo $i $n
                 python ../generate_gt_ica_recordings.py -f $spikes -dur $n -ncells $ncells -noiselev $noise -sync 0 -noplot -elmod
             done
         done
