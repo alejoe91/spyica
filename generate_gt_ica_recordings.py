@@ -219,9 +219,9 @@ class GenST:
         self.templates = np.array(templates_jitter)
         self.splines = np.array(templates_spl)
 
-        plot_templates(self.templates, self.mea_pos, self.mea_pitch)
 
         if self.plot_figures:
+            plot_templates(self.templates, self.mea_pos, self.mea_pitch)
             plot_mea_recording(self.templates[0], self.mea_pos, self.mea_dim)
 
 
