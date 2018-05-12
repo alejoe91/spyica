@@ -1497,7 +1497,6 @@ def evaluate_sum_CC(ic_mix, gt_mix, ic_sources, gt_sources, n_sources): # ):
 
     mix_CC_mean = np.trace(corr_cross_mix)/n_sources
     souces_CC_mean = np.trace(corr_cross_sources)/n_sources
-    raise Exception()
 
     return mix_CC_mean, souces_CC_mean, corr_cross_mix, corr_cross_sources
 
