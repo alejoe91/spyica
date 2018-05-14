@@ -1435,7 +1435,7 @@ def computeRegularizationFactor(W, mode='L1', return_value=True, **kwargs):
                 S.append(ss)
         dS = 2. * (A_cap - A_adj)  * (M_1 - A_der)
 
-    elif smooth == 'smooth_simple':
+    elif mode == 'smooth_simple':
         W_mat = np.zeros(W.shape)
         S = []
         for i, comp in enumerate(W_mat):
