@@ -116,6 +116,12 @@ if __name__ == '__main__':
     else:
         plot_fig = True
 
+    if '-resfile' in sys.argv:
+        pos = sys.argv.index('-resfile')
+        resfile = sys.argv[pos + 1]
+    else:
+        resfile = 'results.csv'
+
 
     if len(sys.argv) == 1:
         print 'Evaluate ICA for spike sorting:\n   -r recording folder\n   -mod orica-ica\n   \nblock block size' \
@@ -312,7 +318,7 @@ if __name__ == '__main__':
     # cc_mixing = np.dot(mixing.T, a.T)
 
     if save_results and 'eeg' not in folder:
-        if not os.path.isfile(join(folder, 'results.csv')):
+        if not os.path.isfile(join(folder, resfile)):
             df = pd.DataFrame({'mu': [mu], 'numpass': [npass], 'reg': [reg], 'oricamode': [oricamod], 'mod': [mod],
                                'block': [block_size], 'ff': [ff], 'lambda': [lambda_val], 'time': proc_time,
                                'CC_mix': [mix_CC_mean], 'CC_source': [sources_CC_mean]})

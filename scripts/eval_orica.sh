@@ -117,7 +117,7 @@ elif [ $# == 2 ]; then
                 for bl in $blocks
                 do
                     echo $mod $bl
-                    python ../evaluate_ICA.py -r $folder$r -oricamod $mod -block $bl -noplot
+                    python ../evaluate_ICA.py -r $folder$r -oricamod $mod -block $bl -noplot -resfile results_block.csv
                 done
             done
         done
@@ -138,7 +138,7 @@ elif [ $# == 2 ]; then
                     for lam in $lambda
                     do
                         echo $mod $f $lam
-                        python ../evaluate_ICA.py -r $folder$r -oricamod $mod -block $bl -ff $f -lambda $lam -noplot
+                        python ../evaluate_ICA.py -r $folder$r -oricamod $mod -block $bl -ff $f -lambda $lam -noplot -resfile results_ff.csv
                     done
                 done
             done
@@ -165,7 +165,7 @@ elif [ $# == 2 ]; then
                     for m in $mu
                     do
                         echo $mod $re $m
-                        python ../evaluate_ICA.py -r $folder$r -oricamod $mod -block $bl -ff $ff -lambda $lambda -reg $re -mu $m -noplot
+                        python ../evaluate_ICA.py -r $folder$r -oricamod $mod -block $bl -ff $ff -lambda $lambda -reg $re -mu $m -noplot -resfile results_reg.csv
                     done
                 done
             done
@@ -176,7 +176,7 @@ elif [ $# == 2 ]; then
 
         for r in $recordings
         do
-            echo $r ICA
+            python ../evaluate_ICA.py -r $folder$r -mod ica -noplot -resfile results_ica.csv
         done
     fi
 fi
