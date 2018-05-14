@@ -322,12 +322,12 @@ if __name__ == '__main__':
             df = pd.DataFrame({'mu': [mu], 'numpass': [npass], 'reg': [reg], 'oricamode': [oricamod], 'mod': [mod],
                                'block': [block_size], 'ff': [ff], 'lambda': [lambda_val], 'time': proc_time,
                                'CC_mix': [mix_CC_mean], 'CC_source': [sources_CC_mean]})
-            with open(join(folder, 'results.csv'), 'w') as f:
+            with open(join(folder, resfile), 'w') as f:
                 df.to_csv(f)
         else:
-            with open(join(folder, 'results.csv'), 'r') as f:
+            with open(join(folder, resfile), 'r') as f:
                 new_index = len(pd.read_csv(f))
-            with open(join(folder, 'results.csv'), 'a') as f:
+            with open(join(folder, resfile), 'a') as f:
                 df = pd.DataFrame({'mu': [mu], 'numpass': [npass], 'reg': [reg], 'oricamode': [oricamod], 'mod': [mod],
                                    'block': [block_size], 'ff': [ff], 'lambda': [lambda_val], 'time': proc_time,
                                    'CC_mix': [mix_CC_mean], 'CC_source': [sources_CC_mean]}, index=[new_index])
