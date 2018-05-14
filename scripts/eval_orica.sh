@@ -6,7 +6,7 @@ oricamod='A_block W_block original'
 chdir=$PWD
 
 if [ $# == 0 ]; then
-    echo "Supply rec electrode folder (includeing final /), mode (block - ff - reg)"
+    echo "Supply rec electrode folder (includeing final /), mode (block - ff - reg - ica - remove)"
 elif [ $# == 2 ]; then
     folder=$1
     analysis=$2
@@ -177,6 +177,16 @@ elif [ $# == 2 ]; then
         for r in $recordings
         do
             python ../evaluate_ICA.py -r $folder$r -mod ica -noplot -resfile results_ica.csv
+        done
+    elif [ $analysis == 'remove' ]; then
+        echo 'Running FastICA'
+
+        for r in $recordings
+        do
+            cd $folder$r
+            rm results.csv
+            echo 'removing '  $r  'results.csv'
+            cd ..
         done
     fi
 fi
