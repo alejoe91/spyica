@@ -122,7 +122,6 @@ if __name__ == '__main__':
     else:
         resfile = 'results.csv'
 
-
     if len(sys.argv) == 1:
         print 'Evaluate ICA for spike sorting:\n   -r recording folder\n   -mod orica-ica\n   \nblock block size' \
               '\n   -ff constant-cooling\n   -mu smoothing\n   -lambda lambda_0' \
@@ -322,6 +321,7 @@ if __name__ == '__main__':
             df = pd.DataFrame({'mu': [mu], 'numpass': [npass], 'reg': [reg], 'oricamode': [oricamod], 'mod': [mod],
                                'block': [block_size], 'ff': [ff], 'lambda': [lambda_val], 'time': proc_time,
                                'CC_mix': [mix_CC_mean], 'CC_source': [sources_CC_mean]})
+            print 'Saving to ', join(folder, resfile)
             with open(join(folder, resfile), 'w') as f:
                 df.to_csv(f)
         else:
@@ -331,6 +331,7 @@ if __name__ == '__main__':
                 df = pd.DataFrame({'mu': [mu], 'numpass': [npass], 'reg': [reg], 'oricamode': [oricamod], 'mod': [mod],
                                    'block': [block_size], 'ff': [ff], 'lambda': [lambda_val], 'time': proc_time,
                                    'CC_mix': [mix_CC_mean], 'CC_source': [sources_CC_mean]}, index=[new_index])
+                print 'Appending to ', join(folder, resfile)
                 df.to_csv(f, header=False)
 
     plt.ion()
