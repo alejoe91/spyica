@@ -1389,7 +1389,7 @@ def computeRegularizationFactor(W, mode='L1', return_value=True, **kwargs):
             raise Exception('Pass M_1 term for L1 or L2 norm')
         else:
             M_1 = kwargs['M_1']
-    elif mode == 'smooth':
+    elif mode == 'smooth' or mode == 'smooth_simple':
         if 'adj_graph' not in kwargs.keys():
             raise Exception('Pass adj_graph term for smoothing')
         else:
