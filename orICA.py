@@ -1438,7 +1438,6 @@ def computeRegularizationFactor(W, mode='L1', return_value=True, **kwargs):
     elif mode == 'smooth_simple':
         W_mat = np.zeros(W.shape)
         S = []
-        print('ciao')
         for i, comp in enumerate(W_mat):
             ss = 0
             for j, adj in enumerate(adj_graph):

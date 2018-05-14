@@ -116,8 +116,6 @@ if __name__ == '__main__':
     else:
         plot_fig = True
 
-    folder = os.path.abspath(folder)
-    print folder
 
     if len(sys.argv) == 1:
         print 'Evaluate ICA for spike sorting:\n   -r recording folder\n   -mod orica-ica\n   \nblock block size' \
@@ -129,6 +127,10 @@ if __name__ == '__main__':
         ff = 'cooling'
         mu = 0.1
         oricamod = 'W_block'
+        raise Exception('Arguments!')
+
+    folder = os.path.abspath(folder)
+    print folder
 
     # else:
     if 'eeg' not in folder:
@@ -187,7 +189,7 @@ if __name__ == '__main__':
         elif orica_type == 'A_block':
             ori = orica.ORICA_A_block(recordings, sphering='offline', forgetfac=ff, lambda_0=lambda_val,
                                       mu=mu, verbose=True, numpass=npass, block_white=block_size, block_ica=block_size,
-                                      adjacency=adj_graph)
+                                      adjacency=adj_graph, regmode=reg)
         else:
             raise Exception('ORICA type not understood')
 
