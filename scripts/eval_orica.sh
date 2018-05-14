@@ -14,7 +14,7 @@ elif [ $# == 2 ]; then
 
     if [ $analysis == 'block' ]; then
         #blocks='1 5 10 20 35 50 75 100 200 350 500 750 1000 1500 2000'
-        blocks='20  50  100  500 1000  2000'
+        blocks='1 5 10 20  50  100  500 1000  2000'
 
         echo 'Block analysis'
 
@@ -35,7 +35,7 @@ elif [ $# == 2 ]; then
         echo 'FF analysis'
         ff='cooling constant'
         #lambda='N 5 3 0.995 0.75 0.5 0.25 0.1 0.01 0.001 0.0001 0.00001'
-        lambda='N  3 0.995 0.1 0.00001'
+        lambda='N 5  3 0.995 0.5  0.1 0.005 0.00001'
         bl=50
 
         for r in $recordings
