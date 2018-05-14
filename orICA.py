@@ -1044,19 +1044,12 @@ class ORICA_W_block():
         if self.mu != 0:
             self.smooth_count += 1
 
-            dS, S = computeRegularizationFactor(W, M_1 = self.icasphere_1, mode='L2')
+            dS, S = computeRegularizationFactor(W, M_1 = self.icasphere_1, mode=self.regmode, adj_graph=self.adjacency)
             self.smooth_count = 0
             self.glob_count += 1
             self.reg.append(S)
             self.state.icaweights = coeff[0] * self.state.icaweights + np.matmul(np.matmul(f, np.diag(coeff[1:])), v.T)\
                                     + self.mu * np.sum(coeff[1:]) * dS #np.sum(np.einsum('i,jk->ijk', coeff, dS), axis=0)
-
-            # if not np.mod(self.smooth_count, 100):
-            #     ica_coeff = coeff[0] * self.state.icaweights + np.matmul(np.matmul(f, np.diag(coeff[1:])), v.T)
-            #     smooth_coeff = self.mu * np.sum(coeff[1:]) * dS
-            #     print('ICA ', np.max(ica_coeff), np.min(ica_coeff))
-            #     print('Smooth ', np.max(smooth_coeff), np.min(smooth_coeff))
-
         else:
             self.state.icaweights = coeff[0] * self.state.icaweights + np.matmul(np.matmul(f, np.diag(coeff[1:])), v.T)
 
@@ -1093,7 +1086,7 @@ class ORICA_W_block():
 class ORICA_A_block():
     def __init__(self, data, numpass=1, weights=None, sphering='offline', lambda_0=0.995, block_white=8, block_ica=8, nsub=0,
                  forgetfac='cooling', localstat=np.inf, ffdecayrate=0.6, evalconverg=True, verbose=False, mu=0, eta=0,
-                 adjacency=None):
+                 adjacency=None, regmode='L1'):
         '''
 
         Parameters
@@ -1158,6 +1151,10 @@ class ORICA_A_block():
         self.adjacency = adjacency
         self.mu = mu
         self.eta = eta
+        self.smooth_count = 0
+        self.reg = []
+        self.regmode = regmode
+        self.lambdas = np.array([])
 
         if weights is None:
             weights = np.eye(nChs)
@@ -1326,7 +1323,19 @@ class ORICA_A_block():
 
 
         coeff = np.append(1, self.state.lambda_k) * np.append(1, np.cumprod(1 - self.state.lambda_k[::-1]))[::-1]
-        self.state.icaweights = coeff[0] * self.state.icaweights + np.matmul(np.matmul(v, np.diag(coeff[1:])), f.T)
+
+        if self.mu != 0:
+            self.smooth_count += 1
+
+            dS, S = computeRegularizationFactor(W, M_1 = self.icasphere_1, mode=self.regmode, adj_graph=self.adjacency)
+            self.smooth_count = 0
+            # self.glob_count += 1
+            self.reg.append(S)
+            self.state.icaweights = coeff[0] * self.state.icaweights + np.matmul(np.matmul(v, np.diag(coeff[1:])), f.T)\
+                                    + self.mu * np.sum(coeff[1:]) * dS.T #np.sum(np.einsum('i,jk->ijk', coeff, dS), axis=0)
+        else:
+            self.state.icaweights = coeff[0] * self.state.icaweights + np.matmul(np.matmul(v, np.diag(coeff[1:])), f.T)
+
 
         # orthogonalize weight matrix
         try:
@@ -1364,13 +1373,15 @@ def computeRegularizationFactor(W, mode='L1', return_value=True, **kwargs):
 
     Parameters
     ----------
-    A:      mixing matrix
+    W:      unmixing matrix
     mode:   L1 - L2 - smooth - simple_smooth
     return_value
     kwargs
 
     Returns
     -------
+    dS: reg matrix for W
+    S: reg value
 
     '''
     if mode == 'L1' or mode == 'L2':
@@ -1391,26 +1402,12 @@ def computeRegularizationFactor(W, mode='L1', return_value=True, **kwargs):
     if mode == 'L1':
         A_cap = np.matmul(M_1, W.T).T
         dS = 2 * np.matmul(np.sign(A_cap.T), M_1)
-        # A_der = np.zeros(A_cap.shape)
-        # for i in range(A_der.shape[0]):
-        #     for j in range(A_der.shape[0]):
-        #         for k in range(A_der.shape[0]):
-        #             A_der[i,j] += M_1[k,j] * np.sign(A_cap[k,i])
         if return_value:
             S = np.sum(A_cap)
-        # dS = A_der
 
     elif mode == 'L2':
         A_cap = np.matmul(M_1, W.T).T
-
-        # matrix = 2 * A_cap.T * M_1
         dS = 2 * np.matmul(A_cap.T, M_1)
-
-        # A_der = np.zeros(A_cap.shape)
-        # for i in range(A_der.shape[0]):
-        #     for j in range(A_der.shape[0]):
-        #         for k in range(A_der.shape[0]):
-        #             A_der[i, j] += 2 * M_1[k, j] * A_cap[k, i]
         if return_value:
             S = np.sum(A_cap**2)
 
@@ -1419,11 +1416,6 @@ def computeRegularizationFactor(W, mode='L1', return_value=True, **kwargs):
     elif mode == 'smooth':
         A_cap = np.matmul(M_1, W.T).T
         A_der = np.zeros(A_cap.shape)
-
-        # dS = np.zeros(A.shape)
-        # for nn in masks:
-        #     for (i, j, k, l, n) in nn:
-        #         dS[i, j] += (A[k, l] - A[k, n])*M_1[k, j]
 
         for i in range(A_der.shape[0]):
             for j in range(A_der.shape[0]):
@@ -1455,7 +1447,7 @@ def computeRegularizationFactor(W, mode='L1', return_value=True, **kwargs):
                 S.append(ss)
         dS = 2. * (W - s_mat)
 
-    return dS, S
+    return dS.T, S
 
 
 

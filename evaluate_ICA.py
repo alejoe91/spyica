@@ -94,7 +94,7 @@ if __name__ == '__main__':
         npass = 1
     if '-reg' in sys.argv:
         pos = sys.argv.index('-reg')
-        reg = int(sys.argv[pos + 1])
+        reg = sys.argv[pos + 1]
     else:
         reg = 'L2'
     if '-mu' in sys.argv:

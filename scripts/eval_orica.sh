@@ -57,8 +57,13 @@ elif [ $# == 2 ]; then
     elif [ $analysis == 'reg' ]; then
         echo 'Regularization analysis'
 
-        reg='L1 L2 smoothing'
-        mu='5 4 3 2 1 0.8 0.6 0.4 0.2 0.1 0.05 0.01 0.001 0.0001 0.00001'
+        reg='L1 L2 smooth smooth_simple'
+        mu='10 5 3 1 0.75 0.5 0.25 0.1 0.05 0.01 0.001 0.0001 0.00001 0'
+        oricamod='A_block W_block'
+        bl=50
+        ff='constant'
+        lambda='N'
+
 
         for r in $recordings
         do
@@ -68,7 +73,8 @@ elif [ $# == 2 ]; then
                 do
                     for m in $mu
                     do
-                        echo $mod $bl $re $m
+                        echo $mod $re $m
+                        python ../evaluate_ICA.py -r $folder$r -oricamod $mod -block $bl -ff $ff -lambda $lambda -reg $re -mu $m -noplot
                     done
                 done
             done
