@@ -1432,20 +1432,21 @@ def computeRegularizationFactor(W, mode='L1', return_value=True, **kwargs):
                 s_mat[i, j] = 1. / len(adj) * np.sum(A_cap[i, adj])
                 if return_value:
                     ss += 1. / len(adj) * np.sum([(A_cap[i, j] - A_cap[i, ad]) ** 2 for ad in adj])
-                S.append(ss)
+            S.append(ss)
         dS = 2. * (A_cap - A_adj)  * (M_1 - A_der)
 
     elif mode == 'smooth_simple':
         W_mat = np.zeros(W.shape)
         S = []
+        print('ciao')
         for i, comp in enumerate(W_mat):
             ss = 0
             for j, adj in enumerate(adj_graph):
                 W_mat[i, j] = 1. / len(adj) * np.sum(W[i, adj])
                 if return_value:
                     ss += 1. / len(adj) * np.sum([(W[i, j] - W[i, ad]) ** 2 for ad in adj])
-                S.append(ss)
-        dS = 2. * (W - s_mat)
+            S.append(ss)
+        dS = 2. * (W - W_mat)
 
     return dS.T, S
 
