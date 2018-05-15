@@ -57,7 +57,7 @@ elif [ $# == 2 ]; then
     elif [ $analysis == 'reg' ]; then
         echo 'Regularization analysis'
 
-        reg='L1 L2 smooth smooth_simple'
+        reg='L1 L2' #smooth smooth_simple'
         mu='10 5 3 1 0.75 0.5 0.25 0.1 0.05 0.01 0.001 0.0001 0.00001 0'
         oricamod='A_block W_block'
         bl=50
@@ -88,13 +88,14 @@ elif [ $# == 2 ]; then
             python ../evaluate_ICA.py -r $folder$r -mod ica -noplot -resfile results_ica.csv
         done
     elif [ $analysis == 'remove' ]; then
-        echo 'Running FastICA'
+        echo 'Removing' $3
+        resfile=$3
 
         for r in $recordings
         do
             cd $folder$r
-            rm results.csv
-            echo 'removing '  $r  'results.csv'
+            rm $resfile
+            echo 'removing '  $r  $resfile
             cd ..
         done
     fi

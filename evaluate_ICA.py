@@ -234,6 +234,9 @@ if __name__ == '__main__':
            smooth[i] = (np.mean([1. / len(adj) * np.sum(a_t[i, j] - a_t[i, adj]) ** 2
                                                  for j, adj in enumerate(adj_graph)]))
 
+        n_high_sk = len(high_sk)
+        n_high_ku = len(high_ku)
+
         # print 'High skewness: ', np.abs(sk[high_sk])
         # print 'Average high skewness: ', np.mean(np.abs(sk[high_sk]))
         # print 'Number high skewness: ', len(sk[high_sk])
@@ -320,7 +323,8 @@ if __name__ == '__main__':
         if not os.path.isfile(join(folder, resfile)):
             df = pd.DataFrame({'mu': [mu], 'numpass': [npass], 'reg': [reg], 'oricamode': [oricamod], 'mod': [mod],
                                'block': [block_size], 'ff': [ff], 'lambda': [lambda_val], 'time': proc_time,
-                               'CC_mix': [mix_CC_mean], 'CC_source': [sources_CC_mean]})
+                               'CC_mix': [mix_CC_mean], 'CC_source': [sources_CC_mean], 'n_sk': n_high_sk,
+                               'n_ku': n_high_ku})
             print 'Saving to ', join(folder, resfile)
             with open(join(folder, resfile), 'w') as f:
                 df.to_csv(f)
@@ -330,7 +334,8 @@ if __name__ == '__main__':
             with open(join(folder, resfile), 'a') as f:
                 df = pd.DataFrame({'mu': [mu], 'numpass': [npass], 'reg': [reg], 'oricamode': [oricamod], 'mod': [mod],
                                    'block': [block_size], 'ff': [ff], 'lambda': [lambda_val], 'time': proc_time,
-                                   'CC_mix': [mix_CC_mean], 'CC_source': [sources_CC_mean]}, index=[new_index])
+                                   'CC_mix': [mix_CC_mean], 'CC_source': [sources_CC_mean], 'n_sk': n_high_sk,
+                                   'n_ku': n_high_ku}, index=[new_index])
                 print 'Appending to ', join(folder, resfile)
                 df.to_csv(f, header=False)
 
