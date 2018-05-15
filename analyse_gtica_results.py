@@ -22,46 +22,10 @@ block_analysis = False
 npass_analysis = True
 ff_analysis = True
 lambda_analysis = True
-
 reg_analysis = True
 
-all_recordings = []
-results_df = []
-
-for av in avail_probes:
-    if any([p in av] for p in probe):
-        all_recordings.extend([join(root, folder, av, f) for f in os.listdir(join(root, folder, av))])
-
-for rec in all_recordings:
-    print rec
-    with open(join(rec, 'rec_info.yaml'), 'r') as f:
-        info = yaml.load(f)
-
-    duration = float(info['Spikegen']['duration'].split()[0])
-    ncells = int(info['Spikegen']['n_cells'])
-    noise_lev = float(info['Noise']['noise_level'])
-
-    print duration, ncells, noise_lev
-
-    if os.path.isfile(join(rec, 'results.csv')):
-        with open(join(rec, 'results.csv'), 'r') as f:
-            df = pd.read_csv(f)
-        nobs = len(df)
-        dur_vec = [duration] * nobs
-        ncells_vec = [ncells] * nobs
-        noise_vec = [noise_lev] * nobs
-
-        df['duration'] = dur_vec
-        df['ncells'] = ncells_vec
-        df['noise'] = noise_vec
-
-        if len(results_df) == 0:
-            results_df = df
-        else:
-            results_df = pd.concat([results_df, df])
-
-results_df.index = range(len(results_df))
-
+with open('results_all.csv', 'r') as f:
+    df = pd.read_csv(f)
 
 if block_analysis:
     ncells = 10
@@ -82,12 +46,14 @@ if ff_analysis:
     ncells = 10
     noise = 10
     duration = 10
-    block=50
+    block = 50
+    mu = 0
     df_ff = results_df
     df_ff = df_ff[df_ff.ncells==ncells]
     df_ff = df_ff[df_ff.noise==noise]
     df_ff = df_ff[df_ff.duration==duration]
     df_ff = df_ff[df_ff.block==block]
+    df_ff = df_ff[df_ff.mu==mu]
 
     df_cooling = df_ff[df_ff.ff=='cooling']
     df_constant = df_ff[df_ff.ff=='constant']
@@ -100,6 +66,35 @@ if ff_analysis:
     ax_const = fig_ff.add_subplot(122)
     ax_const.set_title('CONSTANT')
     sns.pointplot(x='lambda', y='CC_mix', hue='oricamode', data=df_constant, ax=ax_const)
+
+
+if reg_analysis:
+    ncells = 10
+    noise = 10
+    duration = 10
+    block = 50
+    ff='constant'
+    lambda_n = 'N'
+    df_reg = results_df
+    df_reg = df_reg[df_reg.ncells==ncells]
+    df_reg = df_reg[df_reg.noise==noise]
+    df_reg = df_reg[df_reg.duration==duration]
+    df_reg = df_reg[df_reg.block==block]
+    df_reg = df_reg[df_reg.ff==ff]
+    df_reg = df_reg[df_reg['lambda']==lambda_n]
+
+    df_A_block = df_reg[df_reg.oricamode=='A_block']
+    df_W_block = df_reg[df_reg.oricamode=='W_block']
+
+    fig_ff = plt.figure()
+    ax_A = fig_ff.add_subplot(121)
+    ax_A.set_title('A_block')
+    sns.pointplot(x='mu',y='CC_mix', hue='reg', data=df_A_block, ax=ax_A)
+
+    ax_W = fig_ff.add_subplot(122)
+    ax_W.set_title('W_block')
+    sns.pointplot(x='mu', y='CC_mix', hue='reg', data=df_W_block, ax=ax_W)
+
 
 plt.ion()
 plt.show()
