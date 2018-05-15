@@ -87,16 +87,19 @@ elif [ $# == 2 ]; then
         do
             python ../evaluate_ICA.py -r $folder$r -mod ica -noplot -resfile results_ica.csv
         done
-    elif [ $analysis == 'remove' ]; then
+    fi
+elif [ $# == 3 ]; then
+    folder=$1
+    analysis=$2
+    recordings=$(ls $folder)
+    if [ $analysis == 'remove' ]; then
         echo 'Removing' $3
         resfile=$3
 
         for r in $recordings
         do
-            cd $folder$r
-            rm $resfile
+            rm $folder$r/$resfile
             echo 'removing '  $r  $resfile
-            cd ..
         done
     fi
 fi

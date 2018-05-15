@@ -79,9 +79,9 @@ if __name__ == '__main__':
 
     if '-lambda' in sys.argv:
         pos = sys.argv.index('-lambda')
-        lambda_val = sys.argv[pos + 1]
+        lambda_v = sys.argv[pos + 1]
     else:
-        lambda_val = 0.995
+        lambda_v = 0.995
     if '-oricamod' in sys.argv:
         pos = sys.argv.index('-oricamod')
         oricamod = sys.argv[pos + 1]
@@ -168,7 +168,7 @@ if __name__ == '__main__':
 
     orica_type = oricamod # original - W - A -  W_block - A_block
     # if ff == 'constant':
-    if lambda_val == 'N':
+    if lambda_v == 'N':
         lambda_val = 1. / recordings.shape[1] # 0.995
     else:
         lambda_val = float(lambda_val)
@@ -322,7 +322,7 @@ if __name__ == '__main__':
     if save_results and 'eeg' not in folder:
         if not os.path.isfile(join(folder, resfile)):
             df = pd.DataFrame({'mu': [mu], 'numpass': [npass], 'reg': [reg], 'oricamode': [oricamod], 'mod': [mod],
-                               'block': [block_size], 'ff': [ff], 'lambda': [lambda_val], 'time': proc_time,
+                               'block': [block_size], 'ff': [ff], 'lambda': [lambda_v], 'time': proc_time,
                                'CC_mix': [mix_CC_mean], 'CC_source': [sources_CC_mean], 'n_sk': n_high_sk,
                                'n_ku': n_high_ku})
             print 'Saving to ', join(folder, resfile)
@@ -333,7 +333,7 @@ if __name__ == '__main__':
                 new_index = len(pd.read_csv(f))
             with open(join(folder, resfile), 'a') as f:
                 df = pd.DataFrame({'mu': [mu], 'numpass': [npass], 'reg': [reg], 'oricamode': [oricamod], 'mod': [mod],
-                                   'block': [block_size], 'ff': [ff], 'lambda': [lambda_val], 'time': proc_time,
+                                   'block': [block_size], 'ff': [ff], 'lambda': [lambda_v], 'time': proc_time,
                                    'CC_mix': [mix_CC_mean], 'CC_source': [sources_CC_mean], 'n_sk': n_high_sk,
                                    'n_ku': n_high_ku}, index=[new_index])
                 print 'Appending to ', join(folder, resfile)

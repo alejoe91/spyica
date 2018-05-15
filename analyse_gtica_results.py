@@ -18,14 +18,14 @@ probe=['SqMEA', 'Neuronexus']
 avail_probes = os.listdir(folder)
 
 ### ORICA ALGORITHM ###
-block_analysis = False
+block_analysis = True
 npass_analysis = True
 ff_analysis = True
 lambda_analysis = True
 reg_analysis = True
 
 with open('results_all.csv', 'r') as f:
-    df = pd.read_csv(f)
+    results_df = pd.read_csv(f)
 
 if block_analysis:
     ncells = 10
@@ -74,14 +74,14 @@ if reg_analysis:
     duration = 10
     block = 50
     ff='constant'
-    lambda_n = 'N'
+    lambda_n = 0.000003
     df_reg = results_df
     df_reg = df_reg[df_reg.ncells==ncells]
     df_reg = df_reg[df_reg.noise==noise]
     df_reg = df_reg[df_reg.duration==duration]
     df_reg = df_reg[df_reg.block==block]
     df_reg = df_reg[df_reg.ff==ff]
-    df_reg = df_reg[df_reg['lambda']==lambda_n]
+    # df_reg = df_reg[df_reg['lambda']==lambda_n]
 
     df_A_block = df_reg[df_reg.oricamode=='A_block']
     df_W_block = df_reg[df_reg.oricamode=='W_block']
