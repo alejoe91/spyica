@@ -171,7 +171,7 @@ if __name__ == '__main__':
     if lambda_v == 'N':
         lambda_val = 1. / recordings.shape[1] # 0.995
     else:
-        lambda_val = float(lambda_val)
+        lambda_val = float(lambda_v)
 
     t_start = time.time()
     if mod == 'orica':
