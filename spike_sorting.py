@@ -1,8 +1,6 @@
 '''
 
 '''
-
-
 import numpy as np
 import os, sys
 from os.path import join
@@ -26,10 +24,35 @@ import orICA
 
 root_folder = os.getcwd()
 
+#TODO iterative approach
+
 class SpikeSorter:
     def __init__(self, save=False, rec_folder=None, alg=None, lag=None, gfmode=None, duration=None,
                  tstart=None, tstop=None, run_ss=None, plot_figures=True, merge_spikes=False, mu=0, eta=0,
-                 npass=1, block=1000, feat='pca', clust='mog', keepall=True):
+                 npass=1, block=1000, feat='pca', clust='mog', keepall=True, ndim=None):
+        '''
+
+        Parameters
+        ----------
+        save
+        rec_folder
+        alg
+        lag
+        gfmode
+        duration
+        tstart
+        tstop
+        run_ss
+        plot_figures
+        merge_spikes
+        mu
+        eta
+        npass
+        block
+        feat
+        clust
+        keepall
+        '''
         self.rec_folder = rec_folder
         self.rec_name = os.path.split(rec_folder)[-1]
         if self.rec_name == '':
@@ -37,6 +60,8 @@ class SpikeSorter:
             self.rec_name = os.path.split(split)[-1]
 
         print self.rec_name
+
+        self.iterations = 2
 
         self.plot_figures = plot_figures
         if self.plot_figures:
@@ -60,7 +85,8 @@ class SpikeSorter:
         self.keep = keepall
         self.feat = feat
         self.npass = npass
-        self.clock = block
+        self.block = block
+        self.ndim = ndim
 
         self.minimum_spikes_per_cluster = 15
 
@@ -80,13 +106,12 @@ class SpikeSorter:
             self.times = (range(self.recordings.shape[1]) / self.fs).rescale('s')
 
             self.overlapping = self.info['Synchrony']['overlap_pairs']
-            if 'overlap' not in self.gtst[0].annotations.keys():
-                print 'Finding overlapping spikes'
-                annotate_overlapping(self.gtst, overlapping_pairs=self.overlapping)
+            # if 'overlap' not in self.gtst[0].annotations.keys():
+            #     print 'Finding overlapping spikes'
+            #     annotate_overlapping(self.gtst, overlapping_pairs=self.overlapping)
 
             # load MEA info
-            with open(join(root_folder, 'electrodes', self.electrode_name + '.json')) as meafile:
-                elinfo = json.load(meafile)
+            elinfo = MEA.return_mea_info(self.electrode_name)
 
             x_plane = 0.
             pos = MEA.get_elcoords(x_plane, **elinfo)
@@ -170,6 +195,8 @@ class SpikeSorter:
 
         self.ica = False
         self.orica = False
+        self.orica_online = False
+        self.threshold_online = False
         self.smooth = False
         self.cica = False
         self.corica = False
@@ -192,6 +219,10 @@ class SpikeSorter:
                 self.ica = True
             if 'orica' in alg_split:
                 self.orica = True
+            if 'oricaonline' in alg_split:
+                self.orica_online = True
+            if 'threshonline' in alg_split:
+                self.threshold_online = True
             if 'smooth' in alg_split:
                 self.smooth = True
             if 'cica' in alg_split:
@@ -226,7 +257,7 @@ class SpikeSorter:
 
                 chunk_size = int(2*pq.s * self.fs.rescale('Hz'))
                 n_chunks = 1
-                self.s_ica, self.A_ica, self.W_ica = ica.instICA(self.recordings,
+                self.s_ica, self.A_ica, self.W_ica = ica.instICA(self.recordings, n_comp=self.ndim,
                                                                  n_chunks=n_chunks, chunk_size=chunk_size)
                 print 'ICA Finished. Elapsed time: ', time.time() - t_start, ' sec.'
 
@@ -254,10 +285,8 @@ class SpikeSorter:
                                                  alg=self.clustering,
                                                  features=self.feat, keep_all=self.keep)
 
-                    print 'Number of spike trains after clustering: ', len(self.spike_trains)
-
                     self.spike_trains_rej, self.independent_spike_idx, self.dup = \
-                        reject_duplicate_spiketrains(self.spike_trains)
+                        reject_duplicate_spiketrains(self.spike_trains, sources=spike_sources)
 
                     self.sst = self.spike_trains_rej
 
@@ -449,6 +478,7 @@ class SpikeSorter:
                     self.sst = self.spike_trains_rej
 
                 print 'Number of spike trains after clustering: ', len(self.spike_trains)
+                print 'Number of spike trains after duplicate rejection: ', len(self.sst)
 
                 if 'ica_source' in self.sst[0].annotations.keys():
                     self.independent_spike_idx = [s.annotations['ica_source'] for s in self.sst]
@@ -495,25 +525,25 @@ class SpikeSorter:
                 chunk_size = int(2 * pq.s * self.fs.rescale('Hz'))
                 n_chunks = 1
                 adj_graph = extract_adjacency(self.mea_pos, np.max(self.mea_pitch) + 5)
-                self.s_orica, self.A_orica, self.W_orica = orICA.instICA(self.recordings,
+                self.s_orica, self.A_orica, self.W_orica = orICA.instICA(self.recordings, n_comp=self.ndim,
                                                                          n_chunks=n_chunks, chunk_size=chunk_size,
                                                                          mu=mu, adjacency_graph=adj_graph,
-                                                                         numpass=npass, block_size=block, mode='W_block')
+                                                                         numpass=npass, block_size=block, mode='original')
 
-                self.avg_smoothing = []
-                for i in range(self.recordings.shape[0]):
-                    self.avg_smoothing.append(np.mean([1. / len(adj) * np.sum(self.W_orica[i, j] - self.W_orica[i, adj])**2
-                                                              for j, adj in enumerate(adj_graph)]))
+                # self.avg_smoothing = []
+                # for i in range(self.recordings.shape[0]):
+                #     self.avg_smoothing.append(np.mean([1. / len(adj) * np.sum(self.W_orica[i, j] - self.W_orica[i, adj])**2
+                #                                               for j, adj in enumerate(adj_graph)]))
 
                 # clean sources based on skewness and correlation
                 spike_sources, self.source_idx = clean_sources(self.s_orica,
-                                                               kusrt_thresh=self.kurt_thresh,
+                                                               kurt_thresh=self.kurt_thresh,
                                                                skew_thresh=self.skew_thresh)
 
                 self.cleaned_sources_orica = spike_sources
                 self.cleaned_A_orica = self.A_orica[self.source_idx]
                 self.cleaned_W_orica = self.W_orica[self.source_idx]
-                self.cleaned_smoothing = np.array(self.avg_smoothing)[self.source_idx]
+                # self.cleaned_smoothing = np.array(self.avg_smoothing)[self.source_idx]
                 print 'Number of cleaned sources: ', self.cleaned_sources_orica.shape[0]
 
 
@@ -577,7 +607,7 @@ class SpikeSorter:
 
                     import subprocess
                     try:
-                        subprocess.check_output(['klusta', join(self.klusta_folder, 'config.prm'), '--overwrite', '--detect-only'])
+                        subprocess.check_output(['klusta', join(self.klusta_folder, 'config.prm'), '--overwrite'])
                     except subprocess.CalledProcessError as e:
                         raise Exception(e.output)
 
@@ -599,7 +629,78 @@ class SpikeSorter:
                         st.annotations = det.annotations
                         self.detected_spikes.append(st)
 
-                    print 'Number of spike trains after clustering: ', len(self.detected_spikes)
+                    self.spike_trains_rej, self.independent_spike_idx, self.dup = \
+                        reject_duplicate_spiketrains(self.detected_spikes)
+                    if 'group_id' in self.spike_trains_rej[0].annotations.keys():
+                        self.independent_spike_idx = [s.annotations['group_id'] for s in self.spike_trains_rej]
+
+                    self.sst = self.spike_trains_rej
+
+                elif self.clustering=='klusta-back':
+
+                    rec_name = os.path.split(self.rec_folder)
+                    if rec_name[-1] == '':
+                        rec_name = os.path.split(rec_name[0])[-1]
+                    else:
+                        rec_name = rec_name[-1]
+                    if not os.path.isdir(join(self.orica_folder, 'klusta')):
+                        os.makedirs(join(self.orica_folder, 'klusta'))
+                    self.klusta_folder = join(self.orica_folder, 'klusta')
+                    self.klusta_full_path = join(self.klusta_folder, 'recording')
+                    # create prb and prm files
+                    prb_path = export_prb_file(self.mea_pos.shape[0], self.electrode_name, self.klusta_folder,
+                                               pos=self.mea_pos, adj_dist=2 * np.max(self.mea_pitch))
+                    # save binary file
+                    filename = join(self.klusta_folder, 'recordings')
+                    self.reconstructed = np.matmul(self.cleaned_A_orica.T, self.s_orica[self.source_idx])
+                    file_path = save_binary_format(join(self.klusta_folder, 'recordings'), self.reconstructed,
+                                                   spikesorter='klusta')
+
+                    # set up klusta config file
+                    with open(join(self.root, 'spikesorter_files', 'klusta_files',
+                                   'config.prm'), 'r') as f:
+                        klusta_config = f.readlines()
+
+                    nchan = self.mea_pos.shape[0]
+                    threshold = self.threshold
+
+                    klusta_config = ''.join(klusta_config).format(
+                        filename, prb_path, float(self.fs.rescale('Hz')), nchan, 'float32', threshold
+                    )
+                    with open(join(self.klusta_folder, 'config.prm'), 'w') as f:
+                        f.writelines(klusta_config)
+
+                    print('Running klusta')
+
+                    try:
+                        import klusta
+                        # import klustakwik2
+                    except ImportError:
+                        raise ImportError('Install klusta and klustakwik2 packages to run klusta option')
+
+                    import subprocess
+                    try:
+                        subprocess.check_output(['klusta', join(self.klusta_folder, 'config.prm'), '--overwrite', '--detect-only'])
+                    except subprocess.CalledProcessError as e:
+                        raise Exception(e.output)
+
+                    kwikfile = [f for f in os.listdir(self.klusta_folder) if f.endswith('.kwik')]
+                    if len(kwikfile) > 0:
+                        kwikfile = join(self.klusta_folder, kwikfile[0])
+                        if os.path.exists(kwikfile):
+                            kwikio = neo.io.KwikIO(filename=kwikfile, )
+                            blk = kwikio.read_block(raw_data_units='uV')
+                            detected_spikes = blk.segments[0].spiketrains
+                    else:
+                        raise Excaption('No kwik file!')
+
+                    # remove extra index in kwik spiketrains
+                    self.detected_spikes = []
+                    for det in detected_spikes:
+                        st = neo.SpikeTrain([t[0].rescale('ms').magnitude for t in det.times]*pq.ms,
+                                            t_start=det.t_start, t_stop=det.t_stop)
+                        st.annotations = det.annotations
+                        self.detected_spikes.append(st)
 
                     self.spike_trains_rej, self.independent_spike_idx, self.dup = \
                         reject_duplicate_spiketrains(self.detected_spikes)
@@ -689,6 +790,92 @@ class SpikeSorter:
                             spiketrain.annotate(ica_source=int(np.unique(self.firings[0, idx]))-1)
                             self.spike_trains.append(spiketrain)
                     self.sst = self.spike_trains
+
+                elif self.clustering == 'mountain-back':
+
+                    sys.path.append(join(self.root, 'spikesorter_files', 'mountainsort_files'))
+                    import mlpy
+                    from shutil import copyfile
+
+                    if not os.path.isdir(join(self.orica_folder, 'mountain')):
+                        os.makedirs(join(self.orica_folder, 'mountain'))
+                    self.mountain_folder = join(self.orica_folder, 'mountain')
+                    rec_name = os.path.split(self.rec_folder)
+                    if rec_name[-1] == '':
+                        rec_name = os.path.split(rec_name[0])[-1]
+                    else:
+                        rec_name = rec_name[-1]
+                    self.mountain_full_path = join(self.mountain_folder, rec_name)
+
+                    # write data file
+                    filename = join(self.mountain_folder, 'raw.mda')
+                    self.reconstructed = np.matmul(self.cleaned_A_orica.T, self.s_orica[self.source_idx])
+                    mlpy.writemda32(self.reconstructed, filename)
+                    print 'saving ', filename
+
+                    # write csv probe file
+                    with open(join(self.mountain_folder, 'geom.csv'), 'w') as f:
+                        for pos in self.mea_pos:
+                            f.write(str(pos[1]))
+                            f.write(',')
+                            f.write(str(pos[2]))
+                            f.write('\n')
+
+                    # write param file
+                    detect_threshold = None
+                    radius = 100
+                    params = {'samplerate': int(self.fs.rescale('Hz').magnitude), 'detect_sign': -1,
+                              'adjacency_radius': radius}
+
+                    with open(join(self.mountain_folder, 'params.json'), 'w') as f:
+                        json.dump(params, f)
+
+                    # copy mountainsort3.mlp
+                    copyfile(join(self.root, 'spikesorter_files', 'mountainsort_files', 'mountainsort3.mlp'),
+                             join(self.mountain_folder, 'mountainsort3.mlp'))
+
+                    print('Running MountainSort')
+                    self.curate = False
+
+                    import subprocess
+                    os.chdir(self.mountain_folder)
+                    try:
+                        if self.curate:
+                            subprocess.check_output(['mlp-run', 'mountainsort3.mlp', 'sort', '--raw=raw.mda',
+                                                     '--firings_out=firings.mda',  '--geom=geom.csv',
+                                                     '--_params=params.json',
+                                                     '--curate=true'])
+                        else:
+                            subprocess.check_output(['mlp-run', 'mountainsort3.mlp', 'sort', '--raw=raw.mda',
+                                                     '--firings_out=firings.mda', '--geom=geom.csv',
+                                                     '--_params=params.json'])
+
+                        self.processing_time = time.time() - t_start_proc
+                        print 'Elapsed time: ', self.processing_time
+                    except subprocess.CalledProcessError as e:
+                        raise Exception(e.output)
+
+                    os.chdir(self.root)
+
+
+                    print 'Parsing output files...'
+                    self.firings = mlpy.readmda(join(self.mountain_folder, 'firings.mda'))
+                    self.spike_trains = []
+                    clust_id, n_counts = np.unique(self.firings[2], return_counts=True)
+                    self.ml_times = self.times[self.firings[1].astype(int)]
+
+                    self.counts = 0
+                    for clust, count in zip(clust_id, n_counts):
+                        if count > self.minimum_spikes_per_cluster:
+                            idx = np.where(self.firings[2] == clust)[0]
+                            assert len(np.unique(self.firings[0, idx]) == 1)
+                            self.counts += len(idx)
+                            spike_times = self.ml_times[idx]
+                            spiketrain = neo.SpikeTrain(spike_times, t_start=0 * pq.s, t_stop=self.gtst[0].t_stop)
+                            # spiketrain.annotate(ica_source=int(np.unique(self.firings[0, idx]))-1)
+                            self.spike_trains.append(spiketrain)
+                    self.spike_trains, self.independent_spike_idx, self.dup = reject_duplicate_spiketrains(self.spike_trains)
+                    self.sst = self.spike_trains
                 else:
                     self.spike_trains = detect_and_align(spike_sources, self.fs, self.recordings,
                                                          t_start=self.gtst[0].t_start,
@@ -700,6 +887,8 @@ class SpikeSorter:
                     self.sst = self.spike_trains
 
                 print 'Number of spike trains after clustering: ', len(self.spike_trains)
+                print 'Number of spike trains after duplicate rejection: ', len(self.sst)
+
                 self.processing_time = time.time() - t_start_proc
 
                 if 'ica_source' in self.sst[0].annotations.keys():
@@ -709,12 +898,116 @@ class SpikeSorter:
                 self.orica_spike_sources = self.cleaned_sources_orica[self.independent_spike_idx]
                 self.orA_spike_sources = self.cleaned_A_orica[self.independent_spike_idx]
                 self.orW_spike_sources = self.cleaned_W_orica[self.independent_spike_idx]
-                self.orica_smoothing_spike_sources = self.cleaned_smoothing[self.independent_spike_idx]
+                # self.orica_smoothing_spike_sources = self.cleaned_smoothing[self.independent_spike_idx]
 
                 if 'ica_wf' not in self.sst[0].annotations.keys():
                     extract_wf(self.sst, self.orica_spike_sources, self.recordings, self.times, self.fs)
 
-                print 'Average smoothing: ', np.mean(self.orica_smoothing_spike_sources), ' mu=', mu
+                # print 'Average smoothing: ', np.mean(self.orica_smoothing_spike_sources), ' mu=', mu
+                print 'Elapsed time: ', time.time() - t_start
+
+                self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
+
+                print self.pairs
+
+                self.performance =  compute_performance(self.counts)
+
+                if self.plot_figures:
+                    ax1, ax2 = self.plot_results()
+                    ax1.set_title('ORICA', fontsize=20)
+
+                # save results
+                if not os.path.isdir(join(self.orica_folder, 'results')):
+                    os.makedirs(join(self.orica_folder, 'results'))
+                np.save(join(self.orica_folder, 'results', 'counts'), self.counts)
+                np.save(join(self.orica_folder, 'results', 'performance'), self.performance)
+                np.save(join(self.orica_folder, 'results', 'time'), self.processing_time)
+
+        if self.orica_online:
+            if self.run_ss:
+                print 'Applying ORICA online'
+                t_start = time.time()
+                t_start_proc = time.time()
+                if not os.path.isdir(join(self.rec_folder, 'orica-online')):
+                    os.makedirs(join(self.rec_folder, 'orica-online'))
+                self.orica_folder = join(self.rec_folder, 'orica-online')
+
+                self.setting_time = 5
+                self.window = 5
+                self.step = 1
+                self.detection_thresh_online = 10
+                self.skew_thresh_online = 0.8
+
+                self.ori = orICA.onlineORICAss(self.recordings, fs=self.fs, forgetfac='cooling',
+                                               skew_thresh=self.skew_thresh_online, lambda_0=0.995,
+                                               verbose=True, block=self.block, step_size=self.step,
+                                               window=self.window, initial_window=self.setting_time,
+                                               detect_trheshold=self.detection_thresh_online)
+
+                self.processing_time = time.time() - t_start_proc
+
+                # Convert spikes to neo
+                self.sst = []
+                for (k, t) in zip(self.ori.spikes.keys(), self.ori.spikes.values()):
+                    times = t/self.fs
+                    st = neo.SpikeTrain(times=times, t_start=0*pq.s, t_stop = self.gtst[0].t_stop)
+                    st.annotate(ica_source=k)
+                    self.sst.append(st)
+
+                self.oorica_spike_sources_idx = np.sort(self.ori.spikes.keys())
+                self.oorica_spike_sources = self.ori.y[self.oorica_spike_sources_idx]
+                self.oorA_spike_sources = self.ori.mixing[-1, self.oorica_spike_sources_idx]
+                self.oorW_spike_sources = self.ori.unmixing[-1, self.oorica_spike_sources_idx]
+
+                if 'ica_wf' not in self.sst[0].annotations.keys():
+                    extract_wf(self.sst, self.oorica_spike_sources, self.recordings, self.times, self.fs)
+
+                print 'Elapsed time: ', time.time() - t_start
+
+
+
+                self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst,
+                                                                             t_start=self.setting_time)
+
+                print self.pairs
+
+                self.performance =  compute_performance(self.counts)
+
+                if self.plot_figures:
+                    ax1, ax2 = self.plot_results()
+                    ax1.set_title('ORICA', fontsize=20)
+
+                # save results
+                if not os.path.isdir(join(self.orica_folder, 'results')):
+                    os.makedirs(join(self.orica_folder, 'results'))
+                np.save(join(self.orica_folder, 'results', 'counts'), self.counts)
+                np.save(join(self.orica_folder, 'results', 'performance'), self.performance)
+                np.save(join(self.orica_folder, 'results', 'time'), self.processing_time)
+
+        if self.threshold_online:
+            if self.run_ss:
+                print 'Applying threshold online'
+                t_start = time.time()
+                t_start_proc = time.time()
+                if not os.path.isdir(join(self.rec_folder, 'threshold-online')):
+                    os.makedirs(join(self.rec_folder, 'threshold-online'))
+                self.orica_folder = join(self.rec_folder, 'threshold-online')
+
+                self.detection_threshold = -100
+                self.spikes = threshold_spike_sorting(self.recordings, self.detection_threshold)
+
+                self.processing_time = time.time() - t_start_proc
+
+                # Convert spikes to neo
+                self.sst = []
+                for (k, t) in zip(self.spikes.keys(), self.spikes.values()):
+                    times = t/self.fs
+                    st = neo.SpikeTrain(times=times, t_start=0*pq.s, t_stop = self.gtst[0].t_stop)
+                    st.annotate(electrode=k)
+                    self.sst.append(st)
+
+                # extract_wf(self.sst, self.oorica_spike_sources, self.recordings, self.times, self.fs)
+
                 print 'Elapsed time: ', time.time() - t_start
 
                 self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
@@ -837,7 +1130,7 @@ class SpikeSorter:
                 print('Running klusta')
                 try:
                     import klusta
-                    import klustakwik2
+                    # import klustakwik2
                 except ImportError:
                     raise ImportError('Install klusta and klustakwik2 packages to run klusta option')
 
@@ -1326,6 +1619,9 @@ class SpikeSorter:
                 np.save(join(self.yass_folder, 'results', 'performance'), self.performance)
                 np.save(join(self.yass_folder, 'results', 'time'), self.processing_time)
 
+        print 'DONE'
+
+
     def plot_results(self):
         fig = plt.figure()
         ax1 = fig.add_subplot(211)
@@ -1424,7 +1720,7 @@ def plot_mixing(mixing, mea_pos, mea_dim):
     return fig_t
 
 
-def plot_templates(templates, mea_pos, mea_pitch):
+def play_mixing(mixing, mea_pos, mea_dim):
     '''
 
     Parameters
@@ -1440,14 +1736,55 @@ def plot_templates(templates, mea_pos, mea_pitch):
     '''
     from neuroplot import plot_weight
 
-    n_sources = len(templates)
+    n_sources = len(mixing)
     cols = int(np.ceil(np.sqrt(n_sources)))
     rows = int(np.ceil(n_sources / float(cols)))
     fig_t = plt.figure()
 
+    anim = []
+
     for n in range(n_sources):
-        ax_t = fig_t.add_subplot(rows, cols, n+1)
-        plot_mea_recording(templates[n], mea_pos, mea_pitch, ax=ax_t)
+        ax_w = fig_t.add_subplot(rows, cols, n+1)
+        mix = mixing[n]/np.ptp(mixing[n])
+        im = play_spike(mix, mea_dim, ax=ax_w, fig=fig_t)
+        anim.append(im)
+
+    return fig_t
+
+
+def plot_templates(templates, mea_pos, mea_pitch, single_figure=True):
+    '''
+
+    Parameters
+    ----------
+    templates
+    mea_pos
+    mea_pitch
+
+    Returns
+    -------
+
+    '''
+    from neuroplot import plot_weight
+
+    n_sources = len(templates)
+    fig_t = plt.figure()
+
+    if single_figure:
+        colors = plt.rcParams['axes.color_cycle']
+        ax_t = fig_t.add_subplot(111)
+
+        for n, t in enumerate(templates):
+            print 'Plotting spike ', n, ' out of ', n_sources
+            # plot_mea_recording(w[:5], mea_pos, mea_pitch, colors=colors[np.mod(n, len(colors))], ax=ax_w, lw=0.1)
+            plot_mea_recording(t.mean(axis=0), mea_pos, mea_pitch, colors=colors[np.mod(n, len(colors))], ax=ax_t, lw=2)
+    else:
+        cols = int(np.ceil(np.sqrt(n_sources)))
+        rows = int(np.ceil(n_sources / float(cols)))
+
+        for n in range(n_sources):
+            ax_t = fig_t.add_subplot(rows, cols, n+1)
+            plot_mea_recording(templates[n], mea_pos, mea_pitch, ax=ax_t)
 
     return fig_t
 
@@ -1497,7 +1834,7 @@ def templates_weights(templates, weights, mea_pos, mea_dim, mea_pitch, pairs=Non
 
     return fig_t
 
-def plot_waveforms(spiketrains):
+def plot_ic_waveforms(spiketrains):
     ica_sources = [s.annotations['ica_source'] for s in spiketrains]
     sources = np.unique(ica_sources)
     n_sources = len(sources)
@@ -1517,6 +1854,19 @@ def plot_waveforms(spiketrains):
                 count += 1
 
     return fig_t
+
+def plot_waveforms(spiketrains, mea_pos, mea_pitch):
+    wf = [s.waveforms for s in spiketrains]
+    fig_w = plt.figure()
+    ax_w = fig_w.add_subplot(111)
+    colors = plt.rcParams['axes.color_cycle']
+
+    for n, w in enumerate(wf):
+        print 'Plotting spike ', n, ' out of ', len(wf)
+        # plot_mea_recording(w[:5], mea_pos, mea_pitch, colors=colors[np.mod(n, len(colors))], ax=ax_w, lw=0.1)
+        plot_mea_recording(w.mean(axis=0), mea_pos, mea_pitch, colors=colors[np.mod(n, len(colors))], ax=ax_w, lw=2)
+
+    return fig_w
 
 
 if __name__ == '__main__':
@@ -1553,16 +1903,11 @@ if __name__ == '__main__':
         thresh = int(sys.argv[pos + 1])
     else:
         thresh = 4
-    if '-L' in sys.argv:
-        pos = sys.argv.index('-L')
-        lag = int(sys.argv[pos + 1])
+    if '-M' in sys.argv:
+        pos = sys.argv.index('-M')
+        ndim = int(sys.argv[pos + 1])
     else:
-        lag = 2
-    if '-gfmode' in sys.argv:
-        pos = sys.argv.index('-gfmode')
-        gfmode = sys.argv[pos + 1]
-    else:
-        gfmode = 'time'
+        ndim = 'all'
     if '-norun' in sys.argv:
         spikesort = False
     else:
@@ -1614,15 +1959,24 @@ if __name__ == '__main__':
     else:
         save = True
 
-    if len(sys.argv) == 1:
-        print 'Arguments: \n   -r recording filename\n   -mod ICA - cICA - orica - corica - klusta' \
-              'kilosort - mountainsort - spykingcircus  -yass\n   -dur duration in s\n   -tstart start time in s\n' \
-              '   -tstop stop time in s\n   -L   cICA lag'
+    debug = False
+    if debug:
+        rec_folder='recordings/convolution/gtica/Neuronexus-32-cut-30/recording_ica_physrot_Neuronexus-32-cut-30_10_' \
+                   '10.0s_uncorrelated_10.0_5.0Hz_15.0Hz_modulation_noise-all_10-05-2018:11:37_3002/'
+        block=100
+        mod='picard'
+        feat='pca'
+        keepall=True
 
-    elif '-r' not in sys.argv:
+    if len(sys.argv) == 1 and not debug:
+        print 'Arguments: \n   -r recording filename\n   -mod ICA - cICA - orica - corica - oricaonline - threshonline - klusta' \
+              'kilosort - mountainsort - spykingcircus  -yass\n   -dur duration in s\n   -tstart start time in s\n' \
+              '   -tstop stop time in s\n   -M   number of dimensions'
+
+    elif '-r' not in sys.argv and not debug:
         raise AttributeError('Provide model folder for data')
     else:
-        sps = SpikeSorter(save=False, rec_folder=rec_folder, alg=mod, lag=lag, gfmode=gfmode, duration=dur,
+        sps = SpikeSorter(save=False, rec_folder=rec_folder, alg=mod, duration=dur,
                           tstart=tstart, tstop=tstop, run_ss=spikesort, plot_figures=plot_figures,
                           merge_spikes=merge_spikes, mu=mu, eta=eta, npass=npass, block=block, feat=feat,
-                          clust=clust, keepall=keepall)
+                          clust=clust, keepall=keepall, ndim=ndim)

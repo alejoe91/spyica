@@ -32,6 +32,30 @@ class GenST:
                  bound_x=None, min_amp=None, noise_level=None, duration=None, f_exc=None, f_inh=None,
                  filter=True, over=None, sync=None, modulation=True, min_dist=None, plot_figures=True,
                  seed=2904):
+        '''
+
+        Parameters
+        ----------
+        save: save flag (True-False)
+        spike_folder: folder containing spikes or CNN model with validation_data folder
+        fs: sampling frequency (if None taken from spikes)
+        noise_mode: noise generation (uncorrelated: independent gaussian noise - correlated-dist: noise correlated with distance)
+        n_cells: number of cells
+        p_exc: percent of excitatory cells
+        bound_x: boundaries for x direction in um (e.g. [10 60])
+        min_amp: minimum amplitude of templates in uV
+        noise_level: rms noise level
+        duration: duration in s
+        f_exc: average frequency of excitatory cells
+        f_inh: average frequency of inhibtory cells
+        filter: filter or not (True-False)
+        over: threshold to consider 2 templates dpatially overlapping (e.g. 0.6)
+        sync: rate of added synchrony on overlapping spikes
+        modulation: modulation type (none - noise-all (electrodes modulated separately) - noise (templates modulated separately))
+        min_dist: minimum distance between cells in um
+        plot_figures: plot figures or not
+        seed: random seed to select cells
+        '''
 
         self.seed = seed
         np.random.seed(seed)
@@ -60,34 +84,47 @@ class GenST:
         parallel=False
 
         print 'Loading spikes and MEA'
-        # if self.spike_folder.startswith('model'):
-        val_folder = join(os.getcwd(), self.spike_folder, 'validation_data')
-        spikes, _, loc, rot, cat = load_validation_data(val_folder)
+        if os.path.isdir(join(os.getcwd(), self.spike_folder, 'validation_data')):
+            val_folder = join(os.getcwd(), self.spike_folder, 'validation_data')
+            spikes, _, loc, rot, cat = load_validation_data(val_folder)
+
+            cell_dict = {}
+            for cc in all_categories:
+                cell_dict.update({int(np.argwhere(np.array(all_categories) == cc)): cc})
+            cat = np.array([cell_dict[cc] for cc in cat])
+
+            # open 1 yaml file and save pitch
+            yaml_files = [f for f in os.listdir(self.spike_folder) if '.yaml' in f or '.yml' in f]
+            with open(join(self.spike_folder, yaml_files[0]), 'r') as f:
+                self.info = yaml.load(f)
+
+            self.electrode_name = self.info['General']['electrode name']
+            self.rotation_type = self.info['General']['rotation']
+            self.n_points = self.info['General']['n_points']
+        else:
+            files = [f for f in os.listdir(join(os.getcwd(), self.spike_folder))]
+            if any(['e_elpts' in f for f in files]):
+                spikes, loc, rot, cat, etype, morphid, loaded_cat = load_EAP_data(self.spike_folder)
+            # open 1 yaml file and save pitch
+            yaml_files = [f for f in os.listdir(self.spike_folder) if '.yaml' in f or '.yml' in f]
+            with open(join(self.spike_folder, yaml_files[0]), 'r') as f:
+                self.info = yaml.load(f)
+
+            self.rotation_type = self.info['Location']['rotation']
+            self.electrode_name = self.info['Electrodes']['electrode_name']
+            self.n_points = self.info['Electrodes']['n_points']
 
         all_categories = ['BP', 'BTC', 'ChC', 'DBC', 'LBC', 'MC', 'NBC',
                           'NGC', 'SBC', 'STPC', 'TTPC1', 'TTPC2', 'UTPC']
-
-        cell_dict = {}
-        for cc in all_categories:
-            cell_dict.update({int(np.argwhere(np.array(all_categories) == cc)): cc})
-        cat = np.array([cell_dict[cc] for cc in cat])
 
         exc_categories = ['STPC', 'TTPC1', 'TTPC2', 'UTPC']
         inh_categories = ['BP', 'BTC', 'ChC', 'DBC', 'LBC', 'MC', 'NBC', 'NGC', 'SBC']
         bin_cat = get_binary_cat(cat, exc_categories, inh_categories)
 
-        # open 1 yaml file and save pitch
-        yaml_files = [f for f in os.listdir(self.spike_folder) if '.yaml' in f or '.yml' in f]
-        with open(join(self.spike_folder, yaml_files[0]), 'r') as f:
-            self.info = yaml.load(f)
-
-        self.electrode_name = self.info['General']['electrode name']
-        self.rotation_type = self.info['General']['rotation']
-        self.n_points = self.info['General']['n_points']
-
         # load MEA info
-        with open(join(root_folder, 'electrodes', self.electrode_name + '.json')) as meafile:
-            elinfo = json.load(meafile)
+        # with open(join(root_folder, 'electrodes', self.electrode_name + '.json')) as meafile:
+        #     elinfo = json.load(meafile)
+        elinfo = MEA.return_mea_info(self.electrode_name)
 
         x_plane = 0.
         pos = MEA.get_elcoords(x_plane, **elinfo)
@@ -681,7 +718,7 @@ if __name__ == '__main__':
         pos = sys.argv.index('-seed')
         seed = int(sys.argv[pos + 1])
     else:
-        seed = 2904
+        seed = np.random.randint(10000)
 
     print modulation
 
@@ -697,7 +734,7 @@ if __name__ == '__main__':
     elif '-f' not in sys.argv:
         raise AttributeError('Provide model folder for data')
     else:
-        gs = GenST(save=False, spike_folder=spike_folder, fs=freq, n_cells=ncells, p_exc=pexc, duration=dur,
+        gs = GenST(save=True, spike_folder=spike_folder, fs=freq, n_cells=ncells, p_exc=pexc, duration=dur,
                    bound_x=bx, min_amp=minamp, noise_mode=noise, noise_level=noiselev, f_exc=fexc, f_inh=finh,
                    filter=filter, over=over, sync=sync, modulation=modulation, min_dist=mindist, 
                    plot_figures=plot_figures, seed=seed)

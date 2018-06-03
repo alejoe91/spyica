@@ -15,10 +15,9 @@ elif [ $# == 2 ]; then
     if [ $analysis == 'block' ]; then
         #blocks='1 5 10 20 35 50 75 100 200 350 500 750 1000 1500 2000'
         blocks='1 5 10 20  50  100  500 1000  2000'
+        ff='constant'
 
         echo 'Block analysis'
-
-
         for r in $recordings
         do
             for mod in $oricamod
@@ -26,7 +25,7 @@ elif [ $# == 2 ]; then
                 for bl in $blocks
                 do
                     echo $mod $bl
-                    python ../evaluate_ICA.py -r $folder$r -oricamod $mod -block $bl -noplot -resfile results_block.csv
+                    python ../evaluate_ICA.py -r $folder$r -oricamod $mod -ff $ff -block $bl -noplot -resfile results_block.csv
                 done
             done
         done

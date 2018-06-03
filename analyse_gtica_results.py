@@ -18,40 +18,71 @@ probe=['SqMEA', 'Neuronexus']
 avail_probes = os.listdir(folder)
 
 ### ORICA ALGORITHM ###
-block_analysis = True
+block_analysis = False
 npass_analysis = True
 ff_analysis = True
-lambda_analysis = True
+lambda_analysis = False
 reg_analysis = True
 
 with open('results_all.csv', 'r') as f:
     results_df = pd.read_csv(f)
 
+ncells = [30]
+noise = [10]
+duration = [10]
+probe=['Neuronexus-32-cut-30']
+probe=['SqMEA-15-10um']
+results_df_ica = results_df[results_df['mod']=='ica']
+results_df = results_df[results_df.oricamode.isin(['original', 'A_block', 'W_block'])]
+
+df_ica = results_df_ica
+df_ica = df_ica[df_ica.ncells.isin(ncells)]
+df_ica = df_ica[df_ica.noise.isin(noise)]
+df_ica = df_ica[df_ica.duration.isin(duration)]
+df_ica = df_ica[df_ica.electrode.isin(probe)]
+
+compare_with='CC_source'
+
 if block_analysis:
-    ncells = 10
-    noise = 10
-    duration = 10
     ff='cooling'
+    lambda_n=0.995
 
     df_block = results_df
-    df_block = df_block[df_block.ncells==ncells]
-    df_block = df_block[df_block.noise==noise]
-    df_block = df_block[df_block.duration==duration]
+    df_block = df_block[df_block.ncells.isin(ncells)]
+    df_block = df_block[df_block.noise.isin(noise)]
+    df_block = df_block[df_block.duration.isin(duration)]
+    df_block = df_block[df_block.electrode.isin(probe)]
+    df_block = df_block[df_block.ff == ff]
+    df_block = df_block[df_block['lambda']==str(lambda_n)]
 
     fig_block = plt.figure()
-    ax_bl = fig_block.add_subplot(111)
-    sns.pointplot(x='block',y='CC_mix', hue='oricamode', data=df_block, ax=ax_bl)
+    ax_bl = fig_block.add_subplot(121)
+    ax_time = fig_block.add_subplot(122)
+
+    ax_bl = sns.pointplot(x='block',y=compare_with, hue='oricamode', data=df_block, ax=ax_bl)
+    ax_time = sns.pointplot(x='block', y='time', hue='oricamode', data=df_block, ax=ax_time)
+
+    # sns.tsplot(data=[np.mean(df_ica.CC_mix)]*len(np.unique(df_block.block)), ci=np.std(df_ica.CC_mix), color='grey', ax=ax_bl)
+
+    ax_bl.axhline(np.mean(df_ica[compare_with]), color='grey', alpha=0.8)
+    ax_bl.axhline(np.mean(df_ica[compare_with]) + np.std(df_ica[compare_with]), color='grey', ls='--', alpha=0.3)
+    ax_bl.axhline(np.mean(df_ica[compare_with]) - np.std(df_ica[compare_with]), color='grey', ls='--', alpha=0.3)
+
+    ax_time.axhline(np.mean(df_ica.time), color='grey', alpha=0.8)
+    ax_time.axhline(np.mean(df_ica.time) + np.std(df_ica.time), color='grey', ls='--', alpha=0.3)
+    ax_time.axhline(np.mean(df_ica.time) - np.std(df_ica.time), color='grey', ls='--', alpha=0.3)
+
+
 
 if ff_analysis:
-    ncells = 10
-    noise = 10
-    duration = 10
+
     block = 50
     mu = 0
     df_ff = results_df
-    df_ff = df_ff[df_ff.ncells==ncells]
-    df_ff = df_ff[df_ff.noise==noise]
-    df_ff = df_ff[df_ff.duration==duration]
+    df_ff = df_ff[df_ff.ncells.isin(ncells)]
+    df_ff = df_ff[df_ff.noise.isin(noise)]
+    df_ff = df_ff[df_ff.duration.isin(duration)]
+    df_ff = df_ff[df_ff.electrode.isin(probe)]
     df_ff = df_ff[df_ff.block==block]
     df_ff = df_ff[df_ff.mu==mu]
 
@@ -61,27 +92,32 @@ if ff_analysis:
     fig_ff = plt.figure()
     ax_cool = fig_ff.add_subplot(121)
     ax_cool.set_title('COOLING')
-    sns.pointplot(x='lambda',y='CC_mix', hue='oricamode', data=df_cooling, ax=ax_cool)
+    sns.pointplot(x='lambda',y=compare_with, hue='oricamode', data=df_cooling, ax=ax_cool)
+
+    ax_cool.axhline(np.mean(df_ica[compare_with]), color='grey', alpha=0.8)
+    ax_cool.axhline(np.mean(df_ica[compare_with]) + np.std(df_ica[compare_with]), color='grey', ls='--', alpha=0.3)
+    ax_cool.axhline(np.mean(df_ica[compare_with]) - np.std(df_ica[compare_with]), color='grey', ls='--', alpha=0.3)
 
     ax_const = fig_ff.add_subplot(122)
     ax_const.set_title('CONSTANT')
-    sns.pointplot(x='lambda', y='CC_mix', hue='oricamode', data=df_constant, ax=ax_const)
+    sns.pointplot(x='lambda', y=compare_with, hue='oricamode', data=df_constant, ax=ax_const)
 
+    ax_const.axhline(np.mean(df_ica[compare_with]), color='grey', alpha=0.7)
+    ax_const.axhline(np.mean(df_ica[compare_with]) + np.std(df_ica[compare_with]), color='grey', ls='--', alpha=0.3)
+    ax_const.axhline(np.mean(df_ica[compare_with]) - np.std(df_ica[compare_with]), color='grey', ls='--', alpha=0.3)
 
 if reg_analysis:
-    ncells = 10
-    noise = 10
-    duration = 10
     block = 50
     ff='constant'
-    lambda_n = 0.000003
+    lambda_n = 'N'
     df_reg = results_df
-    df_reg = df_reg[df_reg.ncells==ncells]
-    df_reg = df_reg[df_reg.noise==noise]
-    df_reg = df_reg[df_reg.duration==duration]
+    df_reg = df_reg[df_reg.ncells.isin(ncells)]
+    df_reg = df_reg[df_reg.noise.isin(noise)]
+    df_reg = df_reg[df_reg.duration.isin(duration)]
+    df_reg = df_reg[df_reg.electrode.isin(probe)]
     df_reg = df_reg[df_reg.block==block]
     df_reg = df_reg[df_reg.ff==ff]
-    # df_reg = df_reg[df_reg['lambda']==lambda_n]
+    df_reg = df_reg[df_reg['lambda']==str(lambda_n)]
 
     df_A_block = df_reg[df_reg.oricamode=='A_block']
     df_W_block = df_reg[df_reg.oricamode=='W_block']
@@ -89,11 +125,19 @@ if reg_analysis:
     fig_ff = plt.figure()
     ax_A = fig_ff.add_subplot(121)
     ax_A.set_title('A_block')
-    sns.pointplot(x='mu',y='CC_mix', hue='reg', data=df_A_block, ax=ax_A)
+    sns.pointplot(x='mu',y=compare_with, hue='reg', data=df_A_block, ax=ax_A)
+
+    ax_A.axhline(np.mean(df_ica[compare_with]), color='grey', alpha=0.8)
+    ax_A.axhline(np.mean(df_ica[compare_with]) + np.std(df_ica[compare_with]), color='grey', ls='--', alpha=0.3)
+    ax_A.axhline(np.mean(df_ica[compare_with]) - np.std(df_ica[compare_with]), color='grey', ls='--', alpha=0.3)
 
     ax_W = fig_ff.add_subplot(122)
     ax_W.set_title('W_block')
-    sns.pointplot(x='mu', y='CC_mix', hue='reg', data=df_W_block, ax=ax_W)
+    sns.pointplot(x='mu', y=compare_with, hue='reg', data=df_W_block, ax=ax_W)
+
+    ax_W.axhline(np.mean(df_ica[compare_with]), color='grey', alpha=0.8)
+    ax_W.axhline(np.mean(df_ica[compare_with]) + np.std(df_ica[compare_with]), color='grey', ls='--', alpha=0.3)
+    ax_W.axhline(np.mean(df_ica[compare_with]) - np.std(df_ica[compare_with]), color='grey', ls='--', alpha=0.3)
 
 
 plt.ion()

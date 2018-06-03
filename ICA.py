@@ -20,8 +20,10 @@ def instICA(X, n_comp='all', n_chunks=1, chunk_size=None):
     W : unmixing matrix
 
     """
-    if n_comp == 'all':
+    if n_comp == 'all' or n_comp is None:
         n_comp = X.shape[0]
+    else:
+        n_comp = int(n_comp)
 
     n_obs = X.shape[1]
 
@@ -50,6 +52,8 @@ def instICA(X, n_comp='all', n_chunks=1, chunk_size=None):
             print(X_reduced.shape)
     else:
         X_reduced = X
+
+    print(n_comp)
 
     ica = FastICA(n_components=n_comp) #, algorithm='deflation')
     ica.fit(np.transpose(X_reduced))

@@ -22,12 +22,13 @@ import MEAutility as MEA
 from spike_sorting import plot_mixing, plot_templates, templates_weights
 import ICA as ica
 import orICA as orica
+from picard import picard
 
 root_folder = os.getcwd()
 plt.ion()
 plt.show()
 
-save_results = True
+save_results = False
 
 
 def plot_topo_eeg(a, pos):
@@ -110,11 +111,16 @@ if __name__ == '__main__':
         ortho = False
     else:
         ortho = True
-
     if '-noplot' in sys.argv:
         plot_fig = False
     else:
         plot_fig = True
+    if '-online' in sys.argv:
+        onlinesphering = 'online'
+        return_evolution = True
+    else:
+        onlinesphering = 'offline'
+        return_evolution = False
 
     if '-resfile' in sys.argv:
         pos = sys.argv.index('-resfile')
@@ -176,9 +182,9 @@ if __name__ == '__main__':
     t_start = time.time()
     if mod == 'orica':
         if orica_type == 'original':
-            ori = orica.ORICA(recordings, sphering='offline', forgetfac=ff, lambda_0=lambda_val,
+            ori = orica.ORICA(recordings, sphering=onlinesphering, forgetfac=ff, lambda_0=lambda_val,
                               mu=mu, verbose=True, numpass=npass, block_white=block_size, block_ica=block_size,
-                              adjacency=adj_graph, whiten=whiten, ortho=ortho)
+                              adjacency=adj_graph, whiten=whiten, ortho=ortho, return_evolution=return_evolution)
         elif orica_type == 'W':
             ori = orica.ORICA_W(recordings, sphering='offline', forgetfac=ff, lambda_0=lambda_val,
                                 mu=mu, verbose=True, numpass=1, block_white=block_size, block_ica=block_size,
@@ -198,14 +204,30 @@ if __name__ == '__main__':
         else:
             raise Exception('ORICA type not understood')
 
-        y = ori.y
-        w = ori.unmixing
-        m = ori.sphere
-        a = ori.mixing
+        if not return_evolution:
+            y = ori.y
+            w = ori.unmixing
+            m = ori.sphere
+            a = ori.mixing
+        else:
+            y = ori.y
+            w = ori.unmixing[-1]
+            m = ori.sphere[-1]
+            a = ori.mixing[-1]
 
     elif mod == 'ica':
         oricamod = '-'
         y, a, w = ica.instICA(recordings)
+    elif mod == 'picard':
+        oricamod = '-'
+        m, w_, y = picard(recordings, ortho=False)
+        w = np.matmul(w_, m)
+        a = np.linalg.inv(w)
+    elif mod == 'picard-o':
+        oricamod = '-'
+        m, w_, y = picard(recordings, ortho=True)
+        w = np.matmul(w_, m)
+        a = np.linalg.inv(w)
 
     proc_time = time.time() - t_start
     print 'Processing time: ', proc_time
@@ -233,24 +255,10 @@ if __name__ == '__main__':
         for i in range(len(smooth)):
            smooth[i] = (np.mean([1. / len(adj) * np.sum(a_t[i, j] - a_t[i, adj]) ** 2
                                                  for j, adj in enumerate(adj_graph)]))
-
-        n_high_sk = len(high_sk)
-        n_high_ku = len(high_ku)
-
-        # print 'High skewness: ', np.abs(sk[high_sk])
-        # print 'Average high skewness: ', np.mean(np.abs(sk[high_sk]))
-        # print 'Number high skewness: ', len(sk[high_sk])
-        #
-        # print 'High kurtosis: ', ku[high_ku]
-        # print 'Average high kurtosis: ', np.mean(ku[high_ku])
-        # print 'Number high kurtosis: ', len(ku[high_ku])
-        #
-        # # print 'Smoothing: ', smooth[high_sk]
-        # print 'Average smoothing: ', np.mean(smooth[high_sk])
-
-        # if plot_fig:
-        #     plot_mixing(mixing.T, mea_pos, mea_dim)
-        #     plot_mixing(a_t[high_sk], mea_pos, mea_dim)
+        if len(high_sk) != 0:
+            n_high_sk = len(high_sk[0])
+        if len(high_ku) != 0:
+            n_high_ku = len(high_ku[0])
 
         correlation, idx_truth, idx_orica, _ = matcorr(mixing.T, a[high_sk])
         sorted_idx = idx_orica[idx_truth.argsort()]
@@ -322,9 +330,9 @@ if __name__ == '__main__':
     if save_results and 'eeg' not in folder:
         if not os.path.isfile(join(folder, resfile)):
             df = pd.DataFrame({'mu': [mu], 'numpass': [npass], 'reg': [reg], 'oricamode': [oricamod], 'mod': [mod],
-                               'block': [block_size], 'ff': [ff], 'lambda': [lambda_v], 'time': proc_time,
-                               'CC_mix': [mix_CC_mean], 'CC_source': [sources_CC_mean], 'n_sk': n_high_sk,
-                               'n_ku': n_high_ku})
+                               'block': [block_size], 'ff': [ff], 'lambda': [lambda_v], 'time': [proc_time],
+                               'CC_mix': [mix_CC_mean], 'CC_source': [sources_CC_mean], 'n_sk': [n_high_sk],
+                               'n_ku': [n_high_ku]})
             print 'Saving to ', join(folder, resfile)
             with open(join(folder, resfile), 'w') as f:
                 df.to_csv(f)
@@ -333,9 +341,9 @@ if __name__ == '__main__':
                 new_index = len(pd.read_csv(f))
             with open(join(folder, resfile), 'a') as f:
                 df = pd.DataFrame({'mu': [mu], 'numpass': [npass], 'reg': [reg], 'oricamode': [oricamod], 'mod': [mod],
-                                   'block': [block_size], 'ff': [ff], 'lambda': [lambda_v], 'time': proc_time,
-                                   'CC_mix': [mix_CC_mean], 'CC_source': [sources_CC_mean], 'n_sk': n_high_sk,
-                                   'n_ku': n_high_ku}, index=[new_index])
+                                   'block': [block_size], 'ff': [ff], 'lambda': [lambda_v], 'time': [proc_time],
+                                   'CC_mix': [mix_CC_mean], 'CC_source': [sources_CC_mean], 'n_sk': [n_high_sk],
+                                   'n_ku': [n_high_ku]}, index=[new_index])
                 print 'Appending to ', join(folder, resfile)
                 df.to_csv(f, header=False)
 
