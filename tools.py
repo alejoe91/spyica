@@ -9,6 +9,8 @@ import elephant
 import os
 from os.path import join
 import matplotlib.pylab as plt
+from sklearn.decomposition import PCA
+
 
 def load(filename):
     '''Generic loading of cPickled objects from file'''
@@ -42,6 +44,57 @@ def apply_pca(X, n_comp):
     data = pca.fit_transform(np.transpose(X))
 
     return np.transpose(data), pca.components_
+
+def whiten_data(X, n_comp=None):
+    '''
+
+    Parameters
+    ----------
+    X: nfeatures x nsa
+    n_comp: number of components
+
+    Returns
+    -------
+
+    '''
+    # whiten data
+    if n_comp==None:
+        n_comp = np.min(X.shape)
+
+    n_feat, n_samples = X.shape
+
+    # centered_matrix = X - X.mean(axis=1)[:, np.newaxis]
+    # cov = np.dot(centered_matrix, centered_matrix.T)/n_samples
+    # eigvals, eigvecs = np.linalg.eig(cov)
+    # sphere = np.matmul(np.diag(1. / np.sqrt(eigvals)), eigvecs).T
+
+    pca = PCA(n_components=n_comp, whiten=True)
+    data = pca.fit_transform(X.T)
+    eigvecs = pca.components_
+    eigvals = pca.explained_variance_
+    sphere = np.matmul(np.diag(1. / np.sqrt(eigvals)), eigvecs)
+
+    return np.transpose(data), eigvecs, eigvals, sphere
+
+# def whiten_data(X, n_comp=None):
+#     '''
+#
+#     Parameters
+#     ----------
+#     X: nsa x nfeatures
+#     n_comp: number of components
+#
+#     Returns
+#     -------
+#
+#     '''
+#     # whiten data
+#     if n_comp==None:
+#         n_comp = np.min(X.shape)
+#     pca = PCA(n_components=n_comp, whiten=True)
+#     data = pca.fit_transform(X.T)
+#
+#     return np.transpose(data), pca.components_, pca.explained_variance_ratio_
 
 
 def load_EAP_data(spike_folder, cell_names=None, all_categories=None, samples_per_cat=None):
@@ -1179,7 +1232,8 @@ def cc_max_spiketrains(st, st_id, other_st):
         cc_vec[p] = np.max(cc[central_bin-10:central_bin+10]) #/ (len(st) + len(p_st))
     return st_id, cc_vec
 
-def evaluate_spiketrains(gtst, sst, t_jitt = 1*pq.ms, overlapping=False, parallel=True, nprocesses=None, t_start=0*pq.s):
+def evaluate_spiketrains(gtst, sst, t_jitt = 1*pq.ms, overlapping=False, parallel=True, nprocesses=None,
+                         pairs=[], t_start=0*pq.s):
     '''
 
     Parameters
@@ -1215,92 +1269,73 @@ def evaluate_spiketrains(gtst, sst, t_jitt = 1*pq.ms, overlapping=False, paralle
         sst_clip = sst
         gtst_clip = gtst
 
-    print 'Computing correlations between spiketrains'
+    if len(pairs) == 0:
+        print 'Computing correlations between spiketrains'
 
-    or_mat, original_st = bin_spiketimes(gtst_clip, T=1*pq.ms, t_stop=t_stop)
-    pr_mat, predicted_st = bin_spiketimes(sst_clip, T=1*pq.ms, t_stop=t_stop)
-    cc_matr = np.zeros((or_mat.shape[0], pr_mat.shape[0]))
+        or_mat, original_st = bin_spiketimes(gtst_clip, T=1*pq.ms, t_stop=t_stop)
+        pr_mat, predicted_st = bin_spiketimes(sst_clip, T=1*pq.ms, t_stop=t_stop)
+        cc_matr = np.zeros((or_mat.shape[0], pr_mat.shape[0]))
 
-    if parallel:
-        pool = multiprocessing.Pool(nprocesses)
-        results = [pool.apply_async(cc_max_spiketrains, (st, st_id, predicted_st,))
-                   for st_id, st in enumerate(original_st)]
+        if parallel:
+            pool = multiprocessing.Pool(nprocesses)
+            results = [pool.apply_async(cc_max_spiketrains, (st, st_id, predicted_st,))
+                       for st_id, st in enumerate(original_st)]
 
-        idxs = []
-        cc_vecs = []
-        for result in results:
-            idxs.append(result.get()[0])
-            cc_vecs.append(result.get()[1])
+            idxs = []
+            cc_vecs = []
+            for result in results:
+                idxs.append(result.get()[0])
+                cc_vecs.append(result.get()[1])
 
-        for (id, cc_vec) in zip(idxs, cc_vecs):
-            cc_matr[id] = [c / (len(gtst_clip[id]) + len(sst_clip[i])) for i, c in enumerate(cc_vec)]
-        pool.close()
-    else:
-        for o, o_st in enumerate(original_st):
-            for p, p_st in enumerate(predicted_st):
-                cc, bin_ids = cch(o_st, p_st, kernel=np.hamming(100))
+            for (id, cc_vec) in zip(idxs, cc_vecs):
+                cc_matr[id] = [c / (len(gtst_clip[id]) + len(sst_clip[i])) for i, c in enumerate(cc_vec)]
+            pool.close()
+        else:
+            for o, o_st in enumerate(original_st):
+                for p, p_st in enumerate(predicted_st):
+                    cc, bin_ids = cch(o_st, p_st, kernel=np.hamming(100))
+                    central_bin = len(cc) // 2
+                    # normalize by number of spikes
+                    cc_matr[o, p] = np.max(cc[central_bin-10:central_bin+10]) / (len(gtst_clip[o]) + len(sst_clip[p])) # (abs(len(gtst[o]) - len(sst[p])) + 1)
+        cc_matr /= np.max(cc_matr)
+
+        print 'Pairing spike trains'
+        t_hung_st = time.time()
+        cc2 = cc_matr ** 2
+        col_ind, row_ind = linear_sum_assignment(-cc2)
+        put_pairs = -1 * np.ones((len(gtst), 2)).astype('int')
+
+        for i in range(len(gtst)):
+            if i in row_ind:
+                idx = np.where(i == col_ind)
+                if cc2[col_ind[idx], row_ind[idx]] > 0.1:
+                    put_pairs[i] = [int(col_ind[idx]), int(row_ind[idx])]
+        print put_pairs
+
+        t_hung_end = time.time()
+
+        # shift best match by max lag
+        for gt_i, gt in enumerate(gtst_clip):
+            pair = put_pairs[gt_i]
+            if pair[0] != -1:
+                o_st = original_st[gt_i]
+                p_st = predicted_st[pair[1]]
+
+                cc, bin_ids = cch(o_st, p_st, kernel=np.hamming(50))
                 central_bin = len(cc) // 2
                 # normalize by number of spikes
-                cc_matr[o, p] = np.max(cc[central_bin-10:central_bin+10]) / (len(gtst_clip[o]) + len(sst_clip[p])) # (abs(len(gtst[o]) - len(sst[p])) + 1)
-    cc_matr /= np.max(cc_matr)
-    #
-    # best_pairs = np.array([])
-    # assigned_sst = []
-    # assigned_gtst = []
-    #
-    # sorted_rows = []
-    # sorted_idxs = []
-    #
-    # # find best matching pairs (based in CCH)
-    # print 'Finding best ST matches'
-    # for i, row in enumerate(cc_matr):
-    #     sorted_rows.append(np.sort(row)[::-1])
-    #     sorted_idxs.append(np.argsort(row)[::-1])
-    #
-    # sorted_rows = np.array(sorted_rows)
-    # sorted_idxs = np.array(sorted_idxs)
-    # put_pairs = np.zeros((len(gtst_clip), 2), dtype=int)
-    #
-    # for sp in range(len(gtst_clip)):
-    #     put_pairs[sp] = np.array([sp, sorted_idxs[sp, 0]], dtype=int)
-    # put_pairs = np.array(put_pairs)
-    #
-    # # reassign wrong assingments
-    # ass, count = np.unique(put_pairs[:, 1], return_counts=True)
-    # reassign_sst = ass[np.where(count > 1)]
-    # for st in reassign_sst:
-    #     all_pairs = np.where(put_pairs[:, 1] == st)[0]
-    #     sorted_pairs = all_pairs[np.argsort(sorted_rows[all_pairs, 0])[::-1][1:]]
-    #
-    #     for pp in sorted_pairs:
-    #         # print 'Row', pp
-    #         assigned = False
-    #         for i in range(1, sorted_rows.shape[1]):
-    #             possible_st = sorted_idxs[pp, i]
-    #             if possible_st not in ass:
-    #                 assigned = True
-    #                 # print 'Assign', pp, possible_st
-    #                 put_pairs[pp] = np.array([pp, possible_st], dtype=int)
-    #                 ass = np.append(ass, possible_st)
-    #                 break
-    #             if i == sorted_rows.shape[1] - 1:
-    #                 # print 'Out of spiketrains'
-    #                 put_pairs[pp] = np.array([-1, -1], dtype=int)
-    # t_standard_end = time.time()
-    print 'Pairing spike trains'
-    t_hung_st = time.time()
-    cc2 = cc_matr ** 2
-    col_ind, row_ind = linear_sum_assignment(-cc2)
-    put_pairs = -1 * np.ones((len(gtst), 2)).astype('int')
+                max_lag = np.argmax(cc[central_bin - 5:central_bin + 5])
+                optimal_shift = (-5 + max_lag) * pq.ms
+                sst_clip[pair[1]] -= optimal_shift
+                idx_after = np.where(sst_clip[pair[1]] > sst_clip[pair[1]].t_stop)[0]
+                idx_before = np.where(sst_clip[pair[1]] < sst_clip[pair[1]].t_start)[0]
+                if len(idx_after) > 0:
+                    sst_clip[pair[1]][idx_after] = sst_clip[pair[1]].t_stop
+                if len(idx_before) > 0:
+                    sst_clip[pair[1]][idx_before] = sst_clip[pair[1]].t_start
 
-    for i in range(len(gtst)):
-        if i in row_ind:
-            idx = np.where(i == col_ind)
-            if cc2[col_ind[idx], row_ind[idx]] > 0.1:
-                put_pairs[i] = [int(col_ind[idx]), int(row_ind[idx])]
-    print put_pairs
-
-    t_hung_end = time.time()
+    else:
+        put_pairs = pairs
 
     # print 'Standard: ', t_standard_end - t_standard_st
     # print 'Hungarian: ', t_hung_end - t_hung_st
@@ -1315,29 +1350,8 @@ def evaluate_spiketrains(gtst, sst, t_jitt = 1*pq.ms, overlapping=False, paralle
         if pp[1] != -1:
             sst_clip[pp[1]].annotate(paired=True)
 
-    # shift best match by max lag
-    for gt_i, gt in enumerate(gtst_clip):
-        pair = put_pairs[gt_i]
-        if pair[0] != -1:
-            o_st = original_st[gt_i]
-            p_st = predicted_st[pair[1]]
-
-            cc, bin_ids = cch(o_st, p_st, kernel=np.hamming(50))
-            central_bin = len(cc) // 2
-            # normalize by number of spikes
-            max_lag = np.argmax(cc[central_bin-5:central_bin+5])
-            optimal_shift = (-5+max_lag)*pq.ms
-            sst_clip[pair[1]] -= optimal_shift
-            idx_after = np.where(sst_clip[pair[1]] > sst_clip[pair[1]].t_stop)[0]
-            idx_before = np.where(sst_clip[pair[1]] < sst_clip[pair[1]].t_start)[0]
-            if len(idx_after) > 0:
-                sst_clip[pair[1]][idx_after] = sst_clip[pair[1]].t_stop
-            if len(idx_before) > 0:
-                sst_clip[pair[1]][idx_before] = sst_clip[pair[1]].t_start
 
     # Evaluate
-
-    # mark all spikes as unpaired
     for i, gt in enumerate(gtst_clip):
         lab_gt = np.array(['UNPAIRED'] * len(gt))
         gt.annotate(labels=lab_gt)
@@ -1345,7 +1359,6 @@ def evaluate_spiketrains(gtst, sst, t_jitt = 1*pq.ms, overlapping=False, paralle
         lab_st = np.array(['UNPAIRED'] * len(st))
         st.annotate(labels=lab_st)
 
-    t_jitt = 2*pq.ms
     print 'Finding TP'
     for gt_i, gt in enumerate(gtst_clip):
         if put_pairs[gt_i, 0] != -1:
@@ -1473,7 +1486,7 @@ def evaluate_spiketrains(gtst, sst, t_jitt = 1*pq.ms, overlapping=False, paralle
               'FP': FP, 'TOT': total_spikes, 'TOT_GT': TOT_GT, 'TOT_ST': TOT_ST}
 
 
-    return counts, put_pairs, cc_matr
+    return counts, put_pairs #, cc_matr
 
 def matcorr(x, y, rmmean=False, weighting=None):
     from scipy.optimize import linear_sum_assignment
@@ -1483,7 +1496,7 @@ def matcorr(x, y, rmmean=False, weighting=None):
     m = np.min([m,p])
 
     if m != n or  p!=q:
-        print 'matcorr(): Matrices are not square: using max abs corr method (2).'
+        # print 'matcorr(): Matrices are not square: using max abs corr method (2).'
         method = 2
 
     if n != q:
@@ -1567,10 +1580,11 @@ def evaluate_sum_CC(ic_mix, gt_mix, ic_sources, gt_sources, n_sources): # ):
     corr_cross_mix = corr_m**2
     corr_cross_sources = corr_s**2
 
-    mix_CC_mean = np.trace(corr_cross_mix)/n_sources
-    souces_CC_mean = np.trace(corr_cross_sources)/n_sources
+    mix_CC_mean_gt = np.trace(corr_cross_mix)/n_sources
+    mix_CC_mean_id = np.trace(corr_cross_mix)/len(ic_sources)
+    sources_CC_mean = np.trace(corr_cross_sources)/n_sources
 
-    return mix_CC_mean, souces_CC_mean, corr_cross_mix, corr_cross_sources
+    return mix_CC_mean_gt, mix_CC_mean_id, sources_CC_mean, corr_cross_mix, corr_cross_sources
 
 
 
@@ -1619,7 +1633,8 @@ def annotate_overlapping(gtst, t_jitt = 1*pq.ms, overlapping_pairs=None, verbose
                                 #     print 'found overlap! spike 1: ', i, t_i, ' spike 2: ', j, st_j[id_over]
         st_i.annotate(overlap=over)
 
-def raster_plots(st, bintype=False, ax=None, overlap=False, labels=False, color_st=None, fs=10):
+def raster_plots(st, bintype=False, ax=None, overlap=False, labels=False, color_st=None, fs=10,
+                 marker='.', mew=2, markersize=5):
     '''
 
     Parameters
@@ -1640,9 +1655,9 @@ def raster_plots(st, bintype=False, ax=None, overlap=False, labels=False, color_
         t = spiketrain.rescale(pq.s)
         if bintype:
             if spiketrain.annotations['bintype'] == 'EXCIT':
-                ax.plot(t, i * np.ones_like(t), 'b.', markersize=5)
+                ax.plot(t, i * np.ones_like(t), 'b', marker=marker, mew=mew, markersize=markersize, ls='')
             elif spiketrain.annotations['bintype'] == 'INHIB':
-                ax.plot(t, i * np.ones_like(t), 'r.', markersize=5)
+                ax.plot(t, i * np.ones_like(t), 'r', marker=marker, mew=mew, markersize=markersize, ls='')
         else:
             if not overlap and not labels:
                 if np.any(color_st):
@@ -1650,31 +1665,31 @@ def raster_plots(st, bintype=False, ax=None, overlap=False, labels=False, color_
                     colors = sns.color_palette("Paired", len(color_st))
                     if i in color_st:
                         idx = np.where(color_st==i)[0][0]
-                        ax.plot(t, i * np.ones_like(t), '.', color=colors[idx], markersize=5)
+                        ax.plot(t, i * np.ones_like(t), marker=marker, mew=mew, color=colors[idx], markersize=5, ls='')
                     else:
-                        ax.plot(t, i * np.ones_like(t), 'k.', markersize=5)
+                        ax.plot(t, i * np.ones_like(t), 'k', marker=marker, mew=mew, markersize=markersize, ls='')
                 else:
-                    ax.plot(t, i * np.ones_like(t), 'k.', markersize=5)
+                    ax.plot(t, i * np.ones_like(t), 'k', marker=marker, mew=mew, markersize=markersize, ls='')
             elif overlap:
                 for j, t_sp in enumerate(spiketrain):
                     if spiketrain.annotations['overlap'][j] == 'SO':
-                        ax.plot(t_sp, i, 'r.', markersize=5)
+                        ax.plot(t_sp, i, 'r', marker=marker, mew=mew, markersize=markersize, ls='')
                     elif spiketrain.annotations['overlap'][j] == 'O':
-                        ax.plot(t_sp, i, 'g.', markersize=5)
+                        ax.plot(t_sp, i, 'g', marker=marker, mew=mew, markersize=markersize, ls='')
                     elif spiketrain.annotations['overlap'][j] == 'NO':
-                        ax.plot(t_sp, i, 'k.', markersize=5)
+                        ax.plot(t_sp, i, 'k', marker=marker, mew=mew, markersize=markersize, ls='')
             elif labels:
                 for j, t_sp in enumerate(spiketrain):
                     if 'TP' in spiketrain.annotations['labels'][j]:
-                        ax.plot(t_sp, i, 'g.', markersize=5)
+                        ax.plot(t_sp, i, 'g', marker=marker, mew=mew, markersize=markersize, ls='')
                     elif 'CL' in spiketrain.annotations['labels'][j]:
-                        ax.plot(t_sp, i, 'y.', markersize=5)
+                        ax.plot(t_sp, i, 'y', marker=marker, mew=mew, markersize=markersize, ls='')
                     elif 'FN' in spiketrain.annotations['labels'][j]:
-                        ax.plot(t_sp, i, 'r.', markersize=5)
+                        ax.plot(t_sp, i, 'r', marker=marker, mew=mew, markersize=markersize, ls='')
                     elif 'FP' in spiketrain.annotations['labels'][j]:
-                        ax.plot(t_sp, i, 'm.', markersize=5)
+                        ax.plot(t_sp, i, 'm', marker=marker, mew=mew, markersize=markersize, ls='')
                     else:
-                        ax.plot(t_sp, i, 'k.', markersize=5)
+                        ax.plot(t_sp, i, 'k', marker=marker, mew=mew, markersize=markersize, ls='')
 
     ax.axis('tight')
     ax.set_xlim([st[0].t_start.rescale(pq.s), st[0].t_stop.rescale(pq.s)])
@@ -1699,7 +1714,10 @@ def threshold_spike_sorting(recordings, threshold):
     spikes = {}
     for i_rec, rec in enumerate(recordings):
         sp_times = []
-        idx_spikes = np.where(rec < threshold)
+        if isinstance(threshold, list):
+            idx_spikes = np.where(rec < threshold[i_rec])
+        else:
+            idx_spikes = np.where(rec < threshold)
         if len(idx_spikes[0]) != 0:
             idx_spikes = idx_spikes[0]
             for t, idx in enumerate(idx_spikes):

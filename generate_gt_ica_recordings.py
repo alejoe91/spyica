@@ -56,6 +56,7 @@ class GenST:
         self.seed = seed
         np.random.seed(seed)
         self.chunk_duration=0*pq.s
+        self.noise_chunk_duration = 2 * pq.s
 
         self.spike_folder = spike_folder
         self.fs = float(fs) * pq.kHz
@@ -153,37 +154,50 @@ class GenST:
         # Select maximum and create new template with known mixing matrix
         y_bounds = [np.min(self.mea_pos[:, 1]), np.max(self.mea_pos[:, 1])]
         z_bounds = [np.min(self.mea_pos[:, 2]), np.max(self.mea_pos[:, 2])]
-        sd_bound = [100, 600]
-        csd_bound = [-100, 100]
+        sd_bound = [15**2, 30**2]
+        csd_bound = [-10**2, 10**2]
         pos_yz = self.mea_pos[:, 1:]
 
         mixing = []
         templates_mix = []
         pos_mu = []
+        mus = []
 
         for t, temp in enumerate(templates):
             max_temp_idx = np.unravel_index(np.argmin((temp)), temp.shape)[0]
-            mu = np.array([np.random.randint(y_bounds[0], y_bounds[1]), np.random.randint(z_bounds[0], z_bounds[1])])
-            csd = np.random.randint(csd_bound[0], csd_bound[1])
-            # csd = 0
-            sd = np.array([[np.random.randint(sd_bound[0], sd_bound[1]), csd],
-                           [csd, np.random.randint(sd_bound[0], sd_bound[1])]])
-            print 'mu ', mu
-            print 'SD ', sd
+            placed = False
 
-            sd_1 = np.linalg.inv(sd)
-            mix = 1./np.sqrt((2*np.pi**2) * np.linalg.norm(sd)) * \
-                  np.squeeze([np.exp(-0.5 * np.matmul(np.matmul((pos - mu)[:, np.newaxis].T, sd_1),
-                                                      (pos - mu)[:, np.newaxis])) for pos in pos_yz])
-            pos_mu.append([(pos-mu) for pos in pos_yz])
-            mix = mix / np.max(np.abs(mix))
-            new_temp = np.matmul(mix[:, np.newaxis], temp[max_temp_idx][np.newaxis, :])
+            while not placed:
+                mu = np.array(
+                    [np.random.randint(y_bounds[0], y_bounds[1]), np.random.randint(z_bounds[0], z_bounds[1])])
+                dist = np.array([np.linalg.norm(mu - p) for p in mus])
+                if np.any(dist < self.min_dist):
+                    pass
+                else:
+                    csd = np.random.randint(csd_bound[0], csd_bound[1])
+                    # csd = 0
+                    sd = np.array([[np.random.randint(sd_bound[0], sd_bound[1]), csd],
+                                   [csd, np.random.randint(sd_bound[0], sd_bound[1])]])
+                    print 'mu ', mu
+                    print 'SD ', sd
 
-            mixing.append(mix)
-            templates_mix.append(new_temp)
+                    sd_1 = np.linalg.inv(sd)
+                    mix = 1./np.sqrt((2*np.pi**2) * np.linalg.norm(sd)) * \
+                          np.squeeze([np.exp(-0.5 * np.matmul(np.matmul((pos - mu)[:, np.newaxis].T, sd_1),
+                                                              (pos - mu)[:, np.newaxis])) for pos in pos_yz])
+                    pos_mu.append([(pos-mu) for pos in pos_yz])
+                    mix = mix / np.max(np.abs(mix))
+                    new_temp = np.matmul(mix[:, np.newaxis], temp[max_temp_idx][np.newaxis, :])
+
+                    mixing.append(mix)
+                    templates_mix.append(new_temp)
+                    mus.append(mu)
+                    placed = True
+                    print 'Placed ', t+1
 
         mixing = np.array(mixing)
         templates_mix = np.array(templates_mix)
+        mus = np.array(mus)
 
         self.mixing = mixing
         templates = templates_mix
@@ -338,6 +352,29 @@ class GenST:
                 self.amp_mod.append(amp)
                 self.cons_spikes.append(cons)
 
+        # divide in chunks
+        chunks = []
+        if self.duration > self.chunk_duration and self.chunk_duration != 0:
+            start = 0 * pq.s
+            finished = False
+            while not finished:
+                chunks.append([start, start + self.chunk_duration])
+                start = start + self.chunk_duration
+                if start >= self.duration:
+                    finished = True
+            print 'Chunks: ', chunks
+
+        chunks_noise = []
+        if self.duration > self.noise_chunk_duration and self.noise_chunk_duration != 0:
+            start = 0 * pq.s
+            finished = False
+            while not finished:
+                chunks_noise.append([start, start + self.noise_chunk_duration])
+                start = start + self.noise_chunk_duration
+                if start >= self.duration:
+                    finished = True
+            print 'Chunks noise: ', chunks_noise
+
         print 'Generating clean recordings'
         self.recordings = np.zeros((n_elec, n_samples))
         self.times = np.arange(self.recordings.shape[1]) / self.fs
@@ -345,18 +382,6 @@ class GenST:
         # modulated convolution
         pool = multiprocessing.Pool(n_cells)
         t_start = time.time()
-
-        # divide in chunks
-        chunks = []
-        if self.duration > self.chunk_duration and self.chunk_duration != 0:
-            start=0*pq.s
-            finished=False
-            while not finished:
-                chunks.append([start, start+self.chunk_duration])
-                start=start+self.chunk_duration
-                if start >= self.duration:
-                    finished = True
-            print 'Chunks: ', chunks
 
         gt_spikes = []
 
@@ -380,8 +405,8 @@ class GenST:
                             rec_chunk += convolve_templates_spiketrains(st, spike_bin, self.templates[st])
                         else:
                             rec_chunk += convolve_templates_spiketrains(st, spike_bin, self.templates[st],
-                                                                                   modulation=True,
-                                                                                   amp_mod=amp_chunk[st])
+                                                                        modulation=True,
+                                                                        amp_mod=amp_chunk[st])
                 else:
                     if self.spike_modulation == 'none':
                         results = [pool.apply_async(convolve_templates_spiketrains, (st, spike_bin, self.templates[st],))
@@ -403,14 +428,17 @@ class GenST:
                         # reset random seed to keep sampling of jitter spike same
                         seed = np.random.randint(10000)
                         np.random.seed(seed)
+                        # self.recordings += convolve_templates_spiketrains(st, spike_bin, self.templates[st],
+                        #                                                   recordings=self.recordings)
                         self.recordings += convolve_templates_spiketrains(st, spike_bin, self.templates[st])
                         np.random.seed(seed)
                         gt_spikes.append(convolve_single_template(st, spike_bin,
                                                                   self.templates[st, :, np.argmax(self.mixing[st])]))
-                    else:
+                    elif self.spike_modulation == 'noise-all':
                         seed = np.random.randint(10000)
                         np.random.seed(seed)
-                        self.recordings += convolve_templates_spiketrains(st, spike_bin, self.templates[st], modulation=True,
+                        self.recordings += convolve_templates_spiketrains(st, spike_bin, self.templates[st],
+                                                                          modulation=True,
                                                                           amp_mod=self.amp_mod[st])
                         np.random.seed(seed)
                         # print self.amp_mod[0].shape
@@ -418,6 +446,19 @@ class GenST:
                                                                   self.templates[st, :, np.argmax(self.mixing[st])],
                                                                                    modulation=True,
                                                                                    amp_mod=self.amp_mod[st][:,
+                                                                                   np.argmax(self.mixing[st])]))
+                    elif self.spike_modulation == 'noise':
+                        seed = np.random.randint(10000)
+                        np.random.seed(seed)
+                        self.recordings += convolve_templates_spiketrains(st, spike_bin, self.templates[st],
+                                                                          modulation=True,
+                                                                          amp_mod=self.amp_mod[st])
+                        np.random.seed(seed)
+                        # print self.amp_mod[0].shape
+                        gt_spikes.append(convolve_single_template(st, spike_bin,
+                                                                  self.templates[st, :, np.argmax(self.mixing[st])],
+                                                                                   modulation=True,
+                                                                                   amp_mod=self.amp_mod[st][
                                                                                    np.argmax(self.mixing[st])]))
             else:
                 if self.spike_modulation == 'none':
@@ -436,31 +477,44 @@ class GenST:
 
         print 'Elapsed time ', time.time() - t_start
 
-        self.clean_recordings = copy(self.recordings)
+        # self.clean_recordings = copy(self.recordings)
 
         print 'Adding noise'
         if self.noise_level > 0:
             if noise_mode == 'uncorrelated':
-                self.additive_noise = self.noise_level * np.random.randn(self.recordings.shape[0],
-                                                                         self.recordings.shape[1])
-                self.recordings += self.additive_noise
+                if len(chunks_noise) > 0:
+                    recording_chunks = []
+                    for ch, chunk in enumerate(chunks_noise):
+                        print 'Generating noise chunk ', ch + 1, ' of ', len(chunks_noise)
+                        idxs = np.where((self.times >= chunk[0]) & (self.times < chunk[1]))[0]
+                        additive_noise = self.noise_level * np.random.randn(self.recordings.shape[0],
+                                                                            len(idxs))
+                        self.recordings[:, idxs] += additive_noise
+                else:
+                    # self.additive_noise = self.noise_level * np.random.randn(self.recordings.shape[0],
+                    #                                                          self.recordings.shape[1])
+                    self.recordings += self.noise_level * np.random.randn(self.recordings.shape[0],
+                                                                          self.recordings.shape[1])
             elif noise_mode == 'correlated-dist':
                 # TODO divide in chunks
                 cov_dist = np.zeros((n_elec, n_elec))
                 for i, el in enumerate(mea_pos):
                     for j, p in enumerate(mea_pos):
                         if i != j:
-                            cov_dist[i, j] = (0.5*np.min(mea_pitch))/np.linalg.norm(el - p)
+                            cov_dist[i, j] = (0.5 * np.min(mea_pitch)) / np.linalg.norm(el - p)
                         else:
                             cov_dist[i, j] = 1
 
                 self.additive_noise = np.random.multivariate_normal(np.zeros(n_elec), cov_dist,
-                                                               size=(self.recordings.shape[0], self.recordings.shape[1]))
+                                                                    size=(
+                                                                        self.recordings.shape[0],
+                                                                        self.recordings.shape[1]))
                 self.recordings += self.additive_noise
         elif self.noise_level == 'experimental':
             print 'experimental noise model'
         else:
             print 'Noise level is set to 0'
+
 
         if self.filter:
             print 'Filtering signals'
@@ -614,7 +668,7 @@ def convolve_single_template(spike_id, spike_bin, template, modulation=False, am
     return gt_source
 
 
-def convolve_templates_spiketrains(spike_id, spike_bin, template, modulation=False, amp_mod=None):
+def convolve_templates_spiketrains(spike_id, spike_bin, template, modulation=False, amp_mod=None, recordings=[]):
     print 'START: convolution with spike ', spike_id
     if len(template.shape) == 3:
         n_elec = template.shape[1]
@@ -623,7 +677,8 @@ def convolve_templates_spiketrains(spike_id, spike_bin, template, modulation=Fal
         n_elec = template.shape[0]
         len_spike = template.shape[1]
     n_samples = len(spike_bin)
-    recordings = np.zeros((n_elec, n_samples))
+    if len(recordings) == 0:
+        recordings = np.zeros((n_elec, n_samples))
 
     # recordings_test = np.zeros((n_elec, n_samples))
     if not modulation:
@@ -637,8 +692,7 @@ def convolve_templates_spiketrains(spike_id, spike_bin, template, modulation=Fal
             print 'No modulation'
             for pos, spos in enumerate(spike_pos):
                 if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
-                    recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += amp_mod[
-                                                                                                  pos] * temp_jitt
+                    recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += amp_mod[pos] * temp_jitt
                 elif spos - len_spike // 2 < 0:
                     diff = -(spos - len_spike // 2)
                     recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * temp_jitt[:, diff:]
@@ -713,7 +767,7 @@ def convolve_templates_spiketrains(spike_id, spike_bin, template, modulation=Fal
                             [a * t for (a, t) in zip(amp_mod[pos], template)]
                     elif spos-len_spike//2 < 0:
                         diff = -(spos-len_spike//2)
-                        recordings[:, :spos - len_spike // 2 + len_spike] += \
+                        recordings[:, : spos - len_spike // 2 + len_spike] += \
                             [a * t for (a, t) in zip(amp_mod[pos], template[:, diff:])]
                         # recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * template[:, diff:]
                     else:
@@ -721,7 +775,6 @@ def convolve_templates_spiketrains(spike_id, spike_bin, template, modulation=Fal
                         recordings[:, spos - len_spike // 2:] += \
                             [a * t for (a, t) in zip(amp_mod[pos], template[:, :diff])]
                         # recordings[:, spos - len_spike // 2:] += amp_mod[pos] * template[:, :diff]
-
 
 
     print 'DONE: convolution with spike ', spike_id
@@ -751,6 +804,10 @@ if __name__ == '__main__':
     if '-f' in sys.argv:
         pos = sys.argv.index('-f')
         spike_folder = sys.argv[pos + 1]
+    if '-debug' in sys.argv:
+        debug=True
+    else:
+        debug=False
     if '-freq' in sys.argv:
         pos = sys.argv.index('-freq')
         freq = sys.argv[pos + 1]
@@ -816,11 +873,11 @@ if __name__ == '__main__':
         noiselev = sys.argv[pos+1]
         print noiselev
     else:
-        noiselev = 10.
-    if '-nofilter' in sys.argv:
-        filter=False
-    else:
+        noiselev = 5.
+    if '-filter' in sys.argv:
         filter=True
+    else:
+        filter=False
     if '-nomod' in sys.argv:
         modulation='none'
     else:
@@ -839,25 +896,27 @@ if __name__ == '__main__':
     else:
         seed = np.random.randint(0, 10000)
 
-    print modulation
-
-    if len(sys.argv) == 1:
+    if len(sys.argv) == 1 and not debug:
         print 'Arguments: \n   -f filename\n   -dur duration\n   -freq sampling frequency (in kHz)\n' \
               '   -ncells number of cells\n' \
               '   -pexc proportion of exc cells\n   -bx x boundaries [xmin,xmax]\n   -minamp minimum amplitude\n' \
               '   -noise uncorrelated-correlated\n   -noiselev level of rms noise in uV\n   -dur duration\n' \
-              '   -fexc freq exc neurons\n   -finh freq inh neurons\n   -nofilter if filter or not\n' \
+              '   -fexc freq exc neurons\n   -finh freq inh neurons\n   -filter if filter or not\n' \
               '   -over overlapping spike threshold (0.6)\n   -sync added synchorny rate\n' \
               '   -nomod no spike amp modulation\n   -tempmod  modulate each template amplitude with gaussian\n' \
               '   -elmod  modulate each template amplitude with gaussian\n-noplot\n'
+    elif debug:
+        spike_folder='spikes/model_physrot_allcells_NaRep_hold-model-out_l_e_1000_1px_15.0um_15.0um_SqMEA-10-15um_06-08-2017_15-09-2017:23:12/'
+        ncells=5
+        dur=10
+        modulation='none'
+        plot_figures=False
     elif '-f' not in sys.argv:
         raise AttributeError('Provide model folder for data')
-    else:
-        print modulation
-        gs = GenST(save=True, spike_folder=spike_folder, fs=freq, n_cells=ncells, p_exc=pexc, duration=dur,
-                   bound_x=bx, min_amp=minamp, noise_mode=noise, noise_level=noiselev, f_exc=fexc, f_inh=finh,
-                   filter=filter, over=over, sync=sync, modulation=modulation, min_dist=mindist, 
-                   plot_figures=plot_figures, seed=seed)
+    gs = GenST(save=True, spike_folder=spike_folder, fs=freq, n_cells=ncells, p_exc=pexc, duration=dur,
+               bound_x=bx, min_amp=minamp, noise_mode=noise, noise_level=noiselev, f_exc=fexc, f_inh=finh,
+               filter=filter, over=over, sync=sync, modulation=modulation, min_dist=mindist,
+               plot_figures=plot_figures, seed=seed)
 
 
 

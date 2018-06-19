@@ -14,6 +14,7 @@ only_intracellular = True
 model_folder = 'cell_models'
 allen_folder = 'all_active_L5_models'
 cells = 'all'
+drifting = True
 # cell_models = glob.glob(join(model_folder, 'L5*'))
 
 
@@ -22,9 +23,9 @@ if __name__ == '__main__':
     if len(sys.argv) == 1:
         print 'Use: \n-model (bbp - hay - allen), \n-rot (Norot - 3drot - Physrot) ' \
               '\n-intraonly (only intracellular simulation) ' \
-              '\n-probe (SqMEA_-_um - NeuroSeeker-128 - Neuronexus-32 (-cut-30) ' \
+              '\n-probe (SqMEA-_-_um - NeuroSeeker-128 - Neuronexus-32 (-cut-30) ' \
               '- Neuropixel-384 - Neuropixel-24 - Tetrode)' \
-              '\n-n (numbero of observations)'
+              '\n-n (number of observations)\n-drift (drifting units)'
     else:
         if '-model' in sys.argv:
             pos = sys.argv.index('-model')
@@ -50,6 +51,10 @@ if __name__ == '__main__':
             nobs = int(sys.argv[pos+1])  # Na - NaRep - PCA - PCA3d - 3d
         else:
             nobs = 1000
+        if '-drift' in sys.argv:
+            drifting=True
+        else:
+            drifting=False
 
         if model == 'bbp':
             if cells == 'all':
@@ -109,7 +114,8 @@ if __name__ == '__main__':
                         "python hbp_cells.py %s %s %d %r %s %s %d" % (join(model_folder, model, allen_folder, cell_model),
                                                                    model, numb, only_intracellular, rotation, probe, nobs))
                 else:
-                    os.system("python hbp_cells.py %s %s %d %r %s %s %d" % (join(model_folder, model, cell_model), model, numb,
-                                                                         only_intracellular, rotation, probe, nobs))
+                    os.system("python hbp_cells.py %s %s %d %r %s %s %d %r" % (join(model_folder, model, cell_model),
+                                                                               model, numb, only_intracellular,
+                                                                               rotation, probe, nobs, drifting))
 
 

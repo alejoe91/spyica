@@ -119,15 +119,15 @@ class SpikeTrainGenerator:
         #     self.all_spiketrains.extend(self.inh_st)
 
 
-    def raster_plots(self):
+    def raster_plots(self, marker='.'):
         fig = plt.figure()
         ax = fig.add_subplot(111)
         for i, spiketrain in enumerate(self.all_spiketrains):
             t = spiketrain.rescale(pq.s)
             if i < self.n_exc:
-                ax.plot(t, i * np.ones_like(t), 'b.', markersize=5)
+                ax.plot(t, i * np.ones_like(t), color='b', marker=marker, ls='', markersize=5, mew=2)
             else:
-                ax.plot(t, i * np.ones_like(t), 'r.', markersize=5)
+                ax.plot(t, i * np.ones_like(t), color='r', marker=marker, ls='', markersize=5, mew=2)
         ax.axis('tight')
         ax.set_xlim([self.t_start.rescale(pq.s), self.t_stop.rescale(pq.s)])
         ax.set_xlabel('Time (ms)', fontsize=16)

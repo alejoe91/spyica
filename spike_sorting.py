@@ -494,7 +494,7 @@ class SpikeSorter:
                 self.processing_time = time.time() - t_start_proc
                 print 'Elapsed time: ', self.processing_time
 
-                self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
+                self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst)
 
                 print 'PAIRS: '
                 print self.pairs
@@ -906,7 +906,7 @@ class SpikeSorter:
                 # print 'Average smoothing: ', np.mean(self.orica_smoothing_spike_sources), ' mu=', mu
                 print 'Elapsed time: ', time.time() - t_start
 
-                self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
+                self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst)
 
                 print self.pairs
 
@@ -966,7 +966,7 @@ class SpikeSorter:
 
 
 
-                self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst,
+                self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst,
                                                                              t_start=self.setting_time)
 
                 print self.pairs
@@ -1010,7 +1010,7 @@ class SpikeSorter:
 
                 print 'Elapsed time: ', time.time() - t_start
 
-                self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
+                self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst)
 
                 print self.pairs
 
@@ -1079,7 +1079,7 @@ class SpikeSorter:
 
                 print 'Elapsed time: ', time.time() - t_start
 
-                self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
+                self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst)
 
                 print self.pairs
 
@@ -1153,7 +1153,7 @@ class SpikeSorter:
                 else:
                     raise Exception('No kwik file!')
 
-                self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
+                self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst)
 
                 print 'PAIRS: '
                 print self.pairs
@@ -1280,7 +1280,7 @@ class SpikeSorter:
                 self.sst = self.spike_trains
 
                 print 'Evaluating spiketrains...'
-                self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
+                self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst)
 
                 print 'PAIRS: '
                 print self.pairs
@@ -1388,7 +1388,7 @@ class SpikeSorter:
                 print 'Found ', len(self.sst), ' independent spiketrains!'
 
                 print 'Evaluating spiketrains...'
-                self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
+                self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst)
 
                 print 'PAIRS: '
                 print self.pairs
@@ -1499,7 +1499,7 @@ class SpikeSorter:
                 print 'Found ', len(self.sst), ' independent spiketrains!'
 
                 print 'Evaluating spiketrains...'
-                self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
+                self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst)
 
                 print 'PAIRS: '
                 print self.pairs
@@ -1599,7 +1599,7 @@ class SpikeSorter:
                 self.sst = self.spike_trains
 
                 print 'Evaluating spiketrains...'
-                self.counts, self.pairs, self.cc_matr = evaluate_spiketrains(self.gtst, self.sst)
+                self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst)
 
                 print 'PAIRS: '
                 print self.pairs
@@ -1691,7 +1691,7 @@ def compute_performance(counts):
     return performance
 
 
-def plot_mixing(mixing, mea_pos, mea_dim):
+def plot_mixing(mixing, mea_pos, mea_dim, gs=None, fig=None):
     '''
 
     Parameters
@@ -1710,14 +1710,23 @@ def plot_mixing(mixing, mea_pos, mea_dim):
     n_sources = len(mixing)
     cols = int(np.ceil(np.sqrt(n_sources)))
     rows = int(np.ceil(n_sources / float(cols)))
-    fig_t = plt.figure()
+
+    if fig is None and gs is None:
+        fig = plt.figure()
+
+    if gs is not None:
+        from matplotlib import gridspec
+        gs_plot = gridspec.GridSpecFromSubplotSpec(rows, cols, subplot_spec=gs)
 
     for n in range(n_sources):
-        ax_w = fig_t.add_subplot(rows, cols, n+1)
+        if gs is not None:
+            ax_w = fig.add_subplot(gs_plot[n])
+        else:
+            ax_w = fig.add_subplot(rows, cols, n+1)
         mix = mixing[n]/np.ptp(mixing[n])
         plot_weight(mix, mea_dim, ax=ax_w)
 
-    return fig_t
+    return fig
 
 
 def play_mixing(mixing, mea_pos, mea_dim):
@@ -1776,8 +1785,12 @@ def plot_templates(templates, mea_pos, mea_pitch, single_figure=True):
 
         for n, t in enumerate(templates):
             print 'Plotting spike ', n, ' out of ', n_sources
-            # plot_mea_recording(w[:5], mea_pos, mea_pitch, colors=colors[np.mod(n, len(colors))], ax=ax_w, lw=0.1)
-            plot_mea_recording(t.mean(axis=0), mea_pos, mea_pitch, colors=colors[np.mod(n, len(colors))], ax=ax_t, lw=2)
+            if len(t.shape) == 3:
+                # plot_mea_recording(w[:5], mea_pos, mea_pitch, colors=colors[np.mod(n, len(colors))], ax=ax_w, lw=0.1)
+                plot_mea_recording(t.mean(axis=0), mea_pos, mea_pitch, colors=colors[np.mod(n, len(colors))], ax=ax_t, lw=2)
+            else:
+                plot_mea_recording(t, mea_pos, mea_pitch, colors=colors[np.mod(n, len(colors))], ax=ax_t, lw=2)
+
     else:
         cols = int(np.ceil(np.sqrt(n_sources)))
         rows = int(np.ceil(n_sources / float(cols)))

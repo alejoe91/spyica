@@ -484,7 +484,8 @@ def plot_extracellular_spike(cell, electrode, cell_name, figure_folder):
 
 
 def calc_extracellular(cell_model, model_type, save_sim_folder,
-                       load_sim_folder, rotation, cell_model_id, elname, nobs, position=None):
+                       load_sim_folder, rotation, cell_model_id, elname, nobs, position=None, drifting=False,
+                       max_drift=100, min_drift=30, drift_steps=100, x_lim = [10., 80.]):
     """
     Loads data from previous cell simulation, and use results to generate arbitrary number of spikes above a certain
     noise level.
@@ -553,9 +554,14 @@ def calc_extracellular(cell_model, model_type, save_sim_folder,
 
     # Create save folder
     # Create directory with target_spikes and date
-    save_folder = join(sim_folder, 'e_%d_%dpx_%.1fum_%.1fum_%s_%s' % (target_num_spikes, n,
-                                                                      elinfo['pitch'][0],elinfo['pitch'][1],
+    if not drifting:
+        save_folder = join(sim_folder, 'e_%d_%dpx_%.1fum_%.1fum_%s_%s' % (target_num_spikes, n,
+                                                                          elinfo['pitch'][0],elinfo['pitch'][1],
                                                                       MEAname, time.strftime("%d-%m-%Y")))
+    else:
+        save_folder = join(sim_folder, 'e_%d_%dpx_%.1fum_%.1fum_%s_%s_drifting' % (target_num_spikes, n,
+                                                                          elinfo['pitch'][0], elinfo['pitch'][1],
+                                                                          MEAname, time.strftime("%d-%m-%Y")))
 
     if not os.path.isdir(save_folder):
         os.makedirs(save_folder)
@@ -574,13 +580,13 @@ def calc_extracellular(cell_model, model_type, save_sim_folder,
         # mea = MEA.SquareMEA(dim=10, pitch=25, x_plane=0)
         # meapos = mea.get_electrode_positions()
         x_plane = 0.
-        pos = MEA.get_elcoords(x_plane,**elinfo)
+        mea_pos = MEA.get_elcoords(x_plane,**elinfo)
 
-        elec_x = pos[:, 0]
-        elec_y = pos[:, 1]
-        elec_z = pos[:, 2]
+        elec_x = mea_pos[:, 0]
+        elec_y = mea_pos[:, 1]
+        elec_z = mea_pos[:, 2]
 
-        N = np.empty((pos.shape[0], 3))
+        N = np.empty((mea_pos.shape[0], 3))
         for i in xrange(N.shape[0]):
             N[i, ] = [1, 0, 0]  # normal vec. of contacts
 
@@ -627,23 +633,107 @@ def calc_extracellular(cell_model, model_type, save_sim_folder,
             cell.imem = i_spikes[spike_idx, :, :]
             cell.somav = v_spikes[spike_idx, :]
             # ipdb.set_trace()
-            espikes, pos, rot, offs = return_extracellular_spike(cell, cell_name, model_type, electrode_parameters,
-                                                                 [x_lim,y_lim,z_lim], rotation, pos=position)
-            if (np.ptp(espikes, axis=1) >= noise_level).any():
-                # print "Big spike!"
-                save_spikes.append(espikes)
-                save_pos.append(pos)
-                save_rot.append(rot)
-                save_offs.append(offs)
-                plot_spike = False
-                print 'Cell: ' + cell_name + ' Progress: [' + str(len(save_spikes)) + '/' + str(target_num_spikes) + ']'
-                saved += 1
+
+            if not drifting:
+                espikes, pos, rot, offs = return_extracellular_spike(cell, cell_name, model_type, electrode_parameters,
+                                                                     [x_lim,y_lim,z_lim], rotation, pos=position)
+                if (np.ptp(espikes, axis=1) >= noise_level).any():
+                    # print "Big spike!"
+                    save_spikes.append(espikes)
+                    save_pos.append(pos)
+                    save_rot.append(rot)
+                    save_offs.append(offs)
+                    plot_spike = False
+                    print 'Cell: ' + cell_name + ' Progress: [' + str(len(save_spikes)) + '/' + str(target_num_spikes) + ']'
+                    saved += 1
+                else:
+                    print 'ignored spike ', ignored + 1, ' max amp: ', np.max(np.ptp(espikes, axis=1))
+                    # print 'saved spike ', saved
+                    ignored += 1
+                    # Ignoring spike below noise level
+                    pass
             else:
-                # print 'ignored spike ', ignored + 1, ' max amp: ', np.max(np.ptp(espikes, axis=1))
-                # print 'saved spike ', saved
-                # ignored += 1
-                # Ignoring spike below noise level
-                pass
+                '''Move neuron randomly'''
+                x_rand = np.random.uniform(x_lim[0], x_lim[1])
+                y_rand = np.random.uniform(y_lim[0], y_lim[1])
+                z_rand = np.random.uniform(z_lim[0], z_lim[1])
+                init_pos = [x_rand, y_rand, z_rand]
+                drift_x_lim = 10
+                drift_y_lim = 50
+                drift_z_lim = 50
+
+
+                espikes, pos, rot_d, offs = return_extracellular_spike(cell, cell_name, model_type, electrode_parameters,
+                                                                     [x_lim, y_lim, z_lim], rotation, pos=init_pos)
+                drift_ok = False
+                if (np.ptp(espikes, axis=1) >= noise_level).any():
+                    # print "Big spike!"
+                    while not drift_ok:
+                        x_rand = np.random.uniform(init_pos[0] - drift_x_lim, init_pos[0] + drift_x_lim)
+                        y_rand = np.random.uniform(init_pos[1] - drift_y_lim, init_pos[1] + drift_y_lim)
+                        z_rand = np.random.uniform(init_pos[2] - drift_z_lim, init_pos[2] + drift_z_lim)
+                        final_pos = [x_rand, y_rand, z_rand]
+                        drift_dist = np.linalg.norm(np.array(init_pos) - np.array(final_pos))
+
+                        if drift_dist < max_drift and drift_dist > min_drift and \
+                                x_rand > x_lim[0] and x_rand < x_lim[1] and \
+                                y_rand > y_lim[0] and y_rand < y_lim[1] and \
+                                z_rand > z_lim[0] and z_rand < z_lim[1]:
+                            espikes, pos, rot, offs = return_extracellular_spike(cell, cell_name, model_type,
+                                                                                 electrode_parameters, rotation=rot_d,
+                                                                                 pos=final_pos)
+                            if (np.ptp(espikes, axis=1) >= noise_level).any():
+                                # print "Big spike!"
+                                print 'Found final drifting position'
+                                drift_ok = True
+                            else:
+                                # print 'ignored spike max amp: ', np.max(np.ptp(espikes, axis=1)), final_pos
+                                # print 'saved spike ', saved
+                                # Ignoring spike below noise level
+                                pass
+                        else:
+                            # print 'ignored for distance ', drift_dist
+                            # print 'saved spike ', saved
+                            # Ignoring spike below noise level
+                            pass
+
+                    if drift_ok:
+                        drift_spikes = []
+                        drift_pos = []
+                        drift_rot = []
+                        drift_dist = np.linalg.norm(np.array(init_pos) - np.array(final_pos))
+                        drift_dir = np.array(final_pos) - np.array(init_pos)
+                        for i, dp in enumerate(np.linspace(0, 1, drift_steps)):
+                            pos_d = init_pos + dp*drift_dir
+                            # print i, pos_d[0], pos_d[1], pos_d[2]
+
+                            espikes, pos, rot, offs = return_extracellular_spike(cell, cell_name, model_type,
+                                                                                 electrode_parameters, rotation=rot_d,
+                                                                                 pos=pos_d)
+                            drift_spikes.append(espikes)
+                            drift_pos.append(pos)
+                            drift_rot.append(rot)
+
+                        drift_spikes = np.array(drift_spikes)
+                        drift_pos = np.array(drift_pos)
+                        print 'Drift done from ', init_pos, ' to ', final_pos, ' with ', drift_steps, ' steps'
+
+                        save_spikes.append(drift_spikes)
+                        save_pos.append(drift_pos)
+                        save_rot.append(rot_d)
+                        save_offs.append(offs)
+                        plot_spike = False
+                        print 'Cell: ' + cell_name + ' Progress: [' + str(len(save_spikes)) + '/' + str(
+                            target_num_spikes) + ']'
+                        saved += 1
+                else:
+                    # print 'ignored spike ', ignored + 1, ' max amp: ', np.max(np.ptp(espikes, axis=1))
+                    # print 'saved spike ', saved
+                    ignored += 1
+                    # Ignoring spike below noise level
+                    pass
+
+                cell.set_pos(x_rand, y_rand, z_rand)
 
             # if saved < 5 and i > 500:
             #     print 'EAP are too small!'
@@ -666,16 +756,21 @@ def calc_extracellular(cell_model, model_type, save_sim_folder,
             np.save(join(save_folder, 'e_elpts_%d.npy' % target_num_spikes),
                     save_offs)
 
+
         # Log information: (consider xml)
         with open(join(save_folder, 'e_info_%d_%s_%s.yaml' % (target_num_spikes, cell_save_name, time.strftime("%d-%m-%Y"))),
                 'w') as f:
             # create dictionary for yaml file
-            data_yaml = {'General': {'cell name': cell_name, 'target spikes': target_num_spikes, 
-                                     'noise level': noise_level, 'NEURON': neuron.h.nrnversion(1), 
+            data_yaml = {'General': {'cell name': cell_name, 'target spikes': target_num_spikes,
+                                     'noise level': noise_level, 'NEURON': neuron.h.nrnversion(1),
                                      'LFPy': LFPy.__version__ , 'dt': dt},
                         'Electrodes': elinfo,
                         'Location': {'z_lim': z_lim,'y_lim': y_lim, 'x_lim': x_lim, 'rotation': rotation}
                         }
+            if drifting:
+                data_yaml.update({'Drifting': {'min_drift': min_drift, 'max_drift': max_drift,
+                                               'drift_steps': drift_steps}})
+
             yaml.dump(data_yaml, f, default_flow_style=False)
 
         print save_spikes.shape
@@ -756,7 +851,8 @@ def get_exprot_specs(cell_name, model):
 
 
 
-def return_extracellular_spike(cell, cell_name, model_type, electrode_parameters, limits, rotation, pos=None):
+def return_extracellular_spike(cell, cell_name, model_type, electrode_parameters,
+                               limits=[], rotation=[], pos=[]):
     """
     Calculate extracellular spike at tetrode at random position relative to cell
     :param cell: cell object from LFPy
@@ -941,29 +1037,23 @@ def return_extracellular_spike(cell, cell_name, model_type, electrode_parameters
                 z_rot = z_rot + z_rot_offset
                 break
     else:
-        x_rot = 0
-        y_rot = 0
-        z_rot = 0
+        if len(rotation) == 3:
+            x_rot, y_rot, z_rot = rotation
+        else:
+            x_rot = 0
+            y_rot = 0
+            z_rot = 0
 
-    '''Move neuron randomly'''
-    x_rand = np.random.uniform(limits[0][0], limits[0][1])
-    y_rand = np.random.uniform(limits[1][0], limits[1][1])
-    z_rand = np.random.uniform(limits[2][0], limits[2][1])
-
-    # x_rot = np.pi/2.
-    # y_rot = 0
-    # z_rot = 0
-
-    # x_rand = 12.
-    # y_rand = 0.
-    # z_rand = 0.
-
-    if pos == None:
+    if len(pos) == 0:
+        '''Move neuron randomly'''
+        x_rand = np.random.uniform(limits[0][0], limits[0][1])
+        y_rand = np.random.uniform(limits[1][0], limits[1][1])
+        z_rand = np.random.uniform(limits[2][0], limits[2][1])
         cell.set_pos(x_rand, y_rand, z_rand)
+        pos = [x_rand, y_rand, z_rand]
     else:
         cell.set_pos(pos[0], pos[1], pos[2])
     cell.set_rotation(x=x_rot, y=y_rot, z=z_rot)
-    pos = [x_rand, y_rand, z_rand]
     rot = [x_rot, y_rot, z_rot]
 
     # if (np.round(cell.somapos) != np.round(pos)).any():
@@ -998,15 +1088,18 @@ def str2bool(v):
 #     return 0
 
 if __name__ == '__main__':
-    if '-debug' in sys.argv:
+    debug=False
+    if '-debug' in sys.argv or debug:
         cell_folder, model, numb, only_intracellular, rotation, probe, nobs = \
-            'cell_models/bbp/L5_BTC_bAC217_1', 'bbp', 0, False, 'physrot', 'tetrode', 10 #neuronal_model_497232429
+            'cell_models/bbp/L5_BTC_bAC217_1', 'bbp', 0, False, 'physrot', 'SqMEA-10-15um', 10 #neuronal_model_497232429
+        drifting=True
     elif sys.argv[1] == 'compile':
             compile_all_mechanisms(sys.argv[2])
             sys.exit(0)
-    elif len(sys.argv) == 8:
-        cell_folder, model, numb, only_intracellular, rotation, probe, nobs = sys.argv[1:]
+    elif len(sys.argv) == 9:
+        cell_folder, model, numb, only_intracellular, rotation, probe, nobs, drifting = sys.argv[1:]
         only_intracellular = str2bool(only_intracellular)
+        drifting = str2bool(drifting)
     else:
         raise RuntimeError("Wrong usage. Give argument 'compile' to compile mechanisms," +
                            " and cell name, model_type, cell id, only_intra (bool), rotation, probe to simulate cell")
@@ -1022,6 +1115,7 @@ if __name__ == '__main__':
     # run_cell_model_poisssyn(cell_folder, model, vm_im_sim_folder, vm_im_sim_folder, int(numb))
     if not only_intracellular:
         print 'ROTATION type: ', rotation
-        calc_extracellular(cell_folder, model, extra_sim_folder, vm_im_sim_folder, rotation, int(numb), probe, nobs)
+        calc_extracellular(cell_folder, model, extra_sim_folder, vm_im_sim_folder, rotation, int(numb), probe, nobs,
+                           drifting=drifting, x_lim=[10., 80.])
 
 

@@ -15,6 +15,7 @@ import h5py
 import ipdb
 import mne
 import pandas as pd
+import seaborn as sns
 
 from tools import *
 from neuroplot import *
@@ -77,7 +78,6 @@ if __name__ == '__main__':
         ff = sys.argv[pos + 1]
     else:
         ff = 'cooling'
-
     if '-lambda' in sys.argv:
         pos = sys.argv.index('-lambda')
         lambda_v = sys.argv[pos + 1]
@@ -103,6 +103,11 @@ if __name__ == '__main__':
         mu = float(sys.argv[pos + 1])
     else:
         mu = 0
+    if '-M' in sys.argv:
+        pos = sys.argv.index('-M')
+        ndim = int(sys.argv[pos + 1])
+    else:
+        ndim = 'all'
     if '-nowhiten' in sys.argv:
         whiten = False
     else:
@@ -116,10 +121,10 @@ if __name__ == '__main__':
     else:
         plot_fig = True
     if '-online' in sys.argv:
-        onlinesphering = 'online'
+        onlinesphering = True
         return_evolution = True
     else:
-        onlinesphering = 'offline'
+        onlinesphering = False
         return_evolution = False
 
     if '-resfile' in sys.argv:
@@ -128,7 +133,9 @@ if __name__ == '__main__':
     else:
         resfile = 'results.csv'
 
-    if len(sys.argv) == 1:
+    debug = False
+
+    if len(sys.argv) == 1 and not debug:
         print 'Evaluate ICA for spike sorting:\n   -r recording folder\n   -mod orica-ica\n   \nblock block size' \
               '\n   -ff constant-cooling\n   -mu smoothing\n   -lambda lambda_0' \
               '\n   -oricamod  original - A - W - A_block - W_block\n   -npass numpass\n'
@@ -139,6 +146,12 @@ if __name__ == '__main__':
         mu = 0.1
         oricamod = 'W_block'
         raise Exception('Arguments!')
+
+
+    if debug:
+        folder = '/home/alessio/Documents/Codes/SpyICA/recordings/recording_eeg_16chan_ica.mat'
+        block_size = 100
+        onlinesphering=True
 
     folder = os.path.abspath(folder)
     print folder
@@ -155,6 +168,8 @@ if __name__ == '__main__':
         templates = np.load(join(folder, 'templates.npy'))
         mixing = np.load(join(folder, 'mixing.npy')).T
         sources = np.load(join(folder, 'sources.npy'))
+        gtst = np.load(join(folder, 'spiketrains.npy'))
+
         adj_graph = extract_adjacency(mea_pos, np.max(mea_pitch) + 5)
 
         n_sources = sources.shape[0]
@@ -182,9 +197,9 @@ if __name__ == '__main__':
     t_start = time.time()
     if mod == 'orica':
         if orica_type == 'original':
-            ori = orica.ORICA(recordings, sphering=onlinesphering, forgetfac=ff, lambda_0=lambda_val,
+            ori = orica.ORICA(recordings, onlineWhitening=onlinesphering, forgetfac=ff, lambda_0=lambda_val,
                               mu=mu, verbose=True, numpass=npass, block_white=block_size, block_ica=block_size,
-                              adjacency=adj_graph, whiten=whiten, ortho=ortho, return_evolution=return_evolution)
+                              adjacency=adj_graph, whiten=whiten, ortho=ortho, ndim=ndim, white_mode='pca')
         elif orica_type == 'W':
             ori = orica.ORICA_W(recordings, sphering='offline', forgetfac=ff, lambda_0=lambda_val,
                                 mu=mu, verbose=True, numpass=1, block_white=block_size, block_ica=block_size,
@@ -204,20 +219,20 @@ if __name__ == '__main__':
         else:
             raise Exception('ORICA type not understood')
 
-        if not return_evolution:
-            y = ori.y
-            w = ori.unmixing
-            m = ori.sphere
-            a = ori.mixing
-        else:
-            y = ori.y
-            w = ori.unmixing[-1]
-            m = ori.sphere[-1]
-            a = ori.mixing[-1]
+        # if not return_evolution:
+        y = ori.y
+        w = ori.unmixing
+        m = ori.sphere
+        a = ori.mixing
+        # else:
+        #     y = ori.y
+        #     w = ori.unmixing[-1]
+        #     m = ori.sphere[-1]
+        #     a = ori.mixing[-1]
 
     elif mod == 'ica':
         oricamod = '-'
-        y, a, w = ica.instICA(recordings)
+        y, a, w = ica.instICA(recordings, n_comp=ndim)
     elif mod == 'picard':
         oricamod = '-'
         m, w_, y = picard(recordings, ortho=False)
@@ -271,7 +286,7 @@ if __name__ == '__main__':
         average_corr = np.mean(np.abs(correlation[sorted_corr_idx]))
 
         # PI, C = evaluate_PI(sorted_a.T, sorted_mixing)
-        mix_CC_mean, sources_CC_mean, \
+        mix_CC_mean_gt, mix_CC_mean_id, sources_CC_mean, \
         corr_cross_mix, corr_cross_sources = evaluate_sum_CC(sorted_a.T, sorted_mixing.T, sorted_y_true, sorted_y,
                                                              n_sources)
 
@@ -310,7 +325,7 @@ if __name__ == '__main__':
         average_corr = np.mean(np.abs(correlation[sorted_corr_idx]))
 
         # PI, C = evaluate_PI(w, mixing)
-        mix_CC_mean, sources_CC_mean, \
+        mix_CC_mean_gt, mix_CC_mean_id, sources_CC_mean, \
         corr_cross_mix, corr_cross_sources = evaluate_sum_CC(sorted_a.T, sorted_mixing.T, sorted_y_true, sorted_y,
                                                              n_sources)
 
@@ -321,7 +336,10 @@ if __name__ == '__main__':
     # print 'Average smoothing: ', np.mean(smooth)
     # print 'Performance index: ', PI
     # print 'Average correlation: ', average_corr
-    print 'Normalized cumulative correlation - mixing: ', mix_CC_mean
+    print 'Number of GT sources: ', n_sources
+    print 'Number of identified sources: ', n_high_sk
+    print 'Normalized cumulative correlation GT - mixing: ', mix_CC_mean_gt
+    print 'Normalized cumulative correlation ID - mixing: ', mix_CC_mean_id
     print 'Normalized cumulative correlation - sources: ', sources_CC_mean
 
     # cc_sources = np.dot(sources, y.T)
@@ -349,6 +367,58 @@ if __name__ == '__main__':
 
     plt.ion()
     plt.show()
+
+
+    # colors = plt.rcParams['axes.color_cycle']
+    # norm_y = sorted_y / np.max(np.abs(sorted_y), axis=1, keepdims=True)
+    # lw = 0.8
+    # interval = 64000
+    # t_int = 2 * pq.s
+    # t_start = sorted_gtst[0].t_stop - t_int
+    # t_stop = sorted_gtst[0].t_stop
+    #
+    # fig_ic, ax_ic = plt.subplots()
+    # ax_ic.plot(norm_y[0, -interval:], lw=lw)
+    # ax_ic.plot(norm_y[1, -interval:] + 1.3, lw=lw)
+    # ax_ic.plot(norm_y[2, -interval:] + 2.6, lw=lw)
+    # ax_ic.axis('off')
+    # fig_ic.tight_layout()
+    #
+    # fig_th, ax_th = plt.subplots()
+    # ax_th.plot(norm_y[0, -interval:], lw=lw)
+    # ax_th.plot(norm_y[1, -interval:] + 1.3, lw=lw)
+    # ax_th.plot(norm_y[2, -interval:] + 2.6, lw=lw)
+    # ax_th.axhline(-0.5, color=colors[0], lw=2, ls='--')
+    # ax_th.axhline(0.8, color=colors[1], lw=2, ls='--')
+    # ax_th.axhline(2, color=colors[2], lw=2, ls='--')
+    # ax_th.axis('off')
+    # fig_th.tight_layout()
+    #
+    # fig_mix, ax_mix = plt.subplots(3, 1)
+    # plot_weight(sorted_mixing.T[0], mea_dim, ax=ax_mix[0])
+    # plot_weight(sorted_mixing.T[1], mea_dim, ax=ax_mix[1])
+    # plot_weight(sorted_mixing.T[2], mea_dim, ax=ax_mix[2])
+    # fig_mix.tight_layout()
+    #
+    # fig_kde, ax_kde = plt.subplots()
+    # sns.kdeplot(-sorted_y[0], shade=True, ax=ax_kde)
+    # sns.kdeplot(-sorted_y[1]-250, shade=True, ax=ax_kde)
+    # sns.kdeplot(-sorted_y[2]-500, shade=True, ax=ax_kde)
+    # ax_kde.axis('off')
+    # fig_kde.tight_layout()
+    #
+    #
+    # fig_st, ax_st = plt.subplots()
+    # ax_st.plot(sorted_gtst[0].time_slice(t_start=t_start, t_stop=t_stop),
+    #            0*np.ones_like(sorted_gtst[0].time_slice(t_start=t_start, t_stop=t_stop)), '|', markersize=30, mew=2)
+    # ax_st.plot(sorted_gtst[1].time_slice(t_start=t_start, t_stop=t_stop),
+    #            1*np.ones_like(sorted_gtst[1].time_slice(t_start=t_start, t_stop=t_stop)), '|', markersize=30, mew=2)
+    # ax_st.plot(sorted_gtst[2].time_slice(t_start=t_start, t_stop=t_stop),
+    #            2*np.ones_like(sorted_gtst[2].time_slice(t_start=t_start, t_stop=t_stop)), '|', markersize=30, mew=2)
+    # ax_st.axis('off')
+    # fig_st.tight_layout()
+
+
 
 
     # f = plot_mixing(a[high_sk], mea_pos, mea_dim)

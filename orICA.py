@@ -11,34 +11,30 @@ from scipy.linalg import sqrtm
 from scipy.linalg import eigh
 from scipy.linalg import LinAlgError
 from sklearn.decomposition import PCA
+from tools import whiten_data
 
 
-def whiten_data(X, n_comp=None):
-    '''
+def gha_step(lambd, U, x, gamma, q='all', center=False, sort=True):
 
-    Parameters
-    ----------
-    X: nsa x nfeatures
-    n_comp: number of components
+    U_n1 = U + gamma * np.matmul(np.dot(x[:, np.newaxis], x[np.newaxis, :]), U)
+    lambd_n1 = np.zeros_like(lambd)
+    # phi = np.zeros_like(lambd)
+    # for i, (l, u) in enumerate(zip(lambd, U_n1)):
+    #     phi[i] = np.dot(x.T, u)
+    #     sum = np.sum([phi[j] * U[j] for j in range(i-1)], axis=0)
+    #     U_n1[i] = u + gamma * phi[i] * (x - phi[i] * u - sum)
+    #     lambd_n1[i] =  l + gamma * (phi[i] ** 2 - l)
 
-    Returns
-    -------
+    return U_n1, lambd_n1
 
-    '''
-    # whiten data
-    if n_comp==None:
-        n_comp = np.min(X.shape)
-    pca = PCA(n_components=n_comp, whiten=True)
-    data = pca.fit_transform(X.T)
-
-    return np.transpose(data), pca.components_, pca.explained_variance_ratio_
 
 # warnings.filterwarnings('error')
 
 # np.seterr(all='warn')
 
 class State():
-    def __init__(self, icaweights, icasphere, lambda_k, minNonStatIdx, counter, Rn, nonStatIdx, kurtsign):
+    def __init__(self, icaweights, icasphere, lambda_k, minNonStatIdx, counter, Rn, nonStatIdx, kurtsign,
+                 Vn=None, whiteIdx=None):
         self.icaweights = icaweights
         self.icasphere = icasphere
         self.lambda_k = lambda_k
@@ -49,7 +45,8 @@ class State():
         self.kurtsign = kurtsign
 
 class ORICA():
-    def __init__(self, data, numpass=1, weights=None, sphering='offline', ndim='all', lambda_0=0.995, block_white=8, block_ica=8, nsub=0,
+    def __init__(self, data, numpass=1, weights=None, onlineWhitening=False, ndim='all', lambda_0=0.995, block_white=8,
+                 block_ica=8, nsub=0, white_mode='pca', pcaonly=False,
                  forgetfac='cooling', localstat=np.inf, ffdecayrate=0.6, evalconverg=True, verbose=False, mu=0, eta=0,
                  adjacency=None, whiten=True, ortho=True):
         '''
@@ -106,10 +103,6 @@ class ORICA():
         verbose = verbose
 
         # Parameters for data whitening
-        if sphering == 'online':
-            onlineWhitening = True
-        else:
-            onlineWhitening = False
         blockSizeWhite = block_white
         blockSizeICA = block_ica
         numSubgaussian = nsub
@@ -122,39 +115,41 @@ class ORICA():
         self.mu = mu
         self.eta = eta
 
+        ##############################
+        # initialize state variables #
+        ##############################
         if weights is None:
             if self.ndim == 'all':
                 icaweights = np.eye(nChs)
             else:
                 icaweights = np.eye(self.ndim, self.ndim)
 
-        ##############################
-        # initialize state variables #
-        ##############################
         if onlineWhitening:
             if self.ndim == 'all':
                 icasphere = np.eye(nChs)
             else:
                 icasphere = np.eye(self.ndim, nChs)
 
-        lambda_k = np.zeros((1, blockSizeICA))
-        minNonStatIdx = []
-        counter       = 1
+        self.lambda_k = np.zeros((1, blockSizeICA))
+        self.counter       = 1
 
         if self.adaptiveFF['profile'] == 'cooling' or  self.adaptiveFF['profile'] == 'constant':
             self.adaptiveFF['lambda_const']  = 1-np.exp(-1 / (self.adaptiveFF['tau_const']))
 
         if self.evalConvergence['profile']:
-            Rn =[]
-            nonStatIdx =[]
+            self.Rn =[]
+            self.nonStatIdx =[]
+            self.minNonStatIdx = []
+            self.Vn=[]
+            self.whiteIdx=[]
 
         # sign of kurtosis for each component: true(supergaussian), false(subgaussian)
         if self.ndim == 'all':
-            kurtsign = np.ones((nChs, 1))
+            self.kurtsign = np.ones((nChs, 1))
         else:
-            kurtsign = np.ones((self.ndim, 1))
+            self.kurtsign = np.ones((self.ndim, 1))
         if numSubgaussian != 0:
-            kurtsign[:numSubgaussian] = 0
+            self.kurtsign[:numSubgaussian] = 0
 
 
         ######################
@@ -163,32 +158,48 @@ class ORICA():
         if not onlineWhitening: # pre - whitening
             if verbose:
                 print('Use pre-whitening method.')
-            # data_w, comp, exp = whiten_data(data, self.ndim)
-            # icasphere = comp
-
-            icasphere = 2.0 * la.inv(sqrtm(np.cov(data))) # find the "sphering" matrix = sphere()
+            if self.whiten:
+                if self.ndim == 'all':
+                    if white_mode == 'pca':
+                        print('PCA whitening')
+                        data_w, eigvecs, eigvals, sphere = whiten_data(data)
+                        icasphere = sphere
+                    elif white_mode == 'zca':
+                        print('ZCA whitening')
+                        icasphere = 2.0 * la.inv(sqrtm(np.cov(data)))
+                        data_w = np.matmul(icasphere, data)
+                else:
+                    # data_w = np.matmul(icasphere, data)
+                    data_w, eigvecs, eigvals, sphere = whiten_data(data, self.ndim)
+                    icasphere = sphere
+            else:
+                print('Initializing weights to sphering matrix')
+                data_w = np.zeros_like(data, dtype=dtype)
+                icaweights = icasphere
         else: # Online RLS Whitening
             if verbose:
                 print('Use online whitening method.')
+            if self.ndim == 'all':
+                data_w = np.zeros_like(data)
+                n_samples = int(0.1 * 32000)
+
+                print('initializing eigenvectors and values')
+                data_init = data[:, :n_samples]
+                _, eigvecs, eigvals, sphere = whiten_data(data_init)
+
+                self.eigvecs = eigenvecs
+                self.eigvals = eigenvals
+            else:
+                data_w = np.zeros((self.ndim, nPts))
+
 
         # whiten / sphere the data
-        if self.whiten:
-            if self.ndim == 'all':
-                data_w = np.matmul(icasphere, data)
-            else:
-                # icasphere = icasphere[:self.ndim]
-                # data_w = np.matmul(icasphere, data)
-                data_w, comp, exp = whiten_data(data, self.ndim)
-                # data_w1_all, comp_all, exp_al = whiten_data(data)
-                icasphere = comp
-                # raise Exception()
-        else:
-            print('Initializing weights to sphering matrix')
-            data_w = data
-            icaweights = icasphere
 
-        self.state = State(icaweights, icasphere, lambda_k, minNonStatIdx, counter, Rn, nonStatIdx, kurtsign)
-        self.icasphere_1 = la.pinv(self.state.icasphere)
+
+        # self.state = State(icaweights, icasphere, lambda_k, minNonStatIdx, counter, Rn, nonStatIdx, kurtsign)
+        self.icaweights = icaweights
+        self.icasphere = icasphere
+        self.icasphere_1 = la.pinv(self.icasphere)
 
         #########
         # ORICA #
@@ -198,6 +209,7 @@ class ORICA():
         numBlock = int(np.floor(nPts / np.min([blockSizeICA, blockSizeWhite])))
 
         self.NSI = []
+        self.WI = []
 
         if verbose:
             printflag = 0
@@ -214,9 +226,12 @@ class ORICA():
                 dataRange = np.arange(int(np.floor(bi * nPts / numBlock)),
                                   int(np.min([nPts, np.floor((bi + 1) * nPts / numBlock)])))
                 if onlineWhitening:
-                    self.dynamicWhitening(data_w[:, dataRange], dataRange)
-                    data_w[:, dataRange] = np.matmul(self.state.icasphere, data_w[:, dataRange])
-                self.dynamicOrica(data_w[:, dataRange], dataRange)
+                    self.dynamicWhitening(data[:, dataRange], dataRange)
+                    #self.dynamicPCA(data[:, dataRange], dataRange)
+                    data_w[:, dataRange] = np.matmul(self.icasphere, data[:, dataRange])
+
+                if not pcaonly:
+                    self.dynamicOrica(data_w[:, dataRange], dataRange)
 
                 if verbose:
                     if printflag < np.floor(10 * (it * numBlock + bi) / numPass / numBlock):
@@ -228,33 +243,78 @@ class ORICA():
             print('ORICA Finished. Elapsed time: ', processing_time, ' sec.')
 
         # output weights and sphere matrices
-        self.sphere = self.state.icasphere
-        if self.whiten:
-            self.unmixing = np.matmul(self.state.icaweights, self.sphere)
-        else:
-            self.unmixing = self.state.icaweights
-        self.mixing = la.pinv(self.unmixing).T
-        self.y = np.matmul(self.unmixing, data)
+        self.sphere = self.icasphere
+        if not pcaonly:
+            if self.whiten:
+                self.unmixing = np.matmul(self.icaweights, self.sphere)
+            else:
+                self.unmixing = self.icaweights
+            self.mixing = la.pinv(self.unmixing).T
+            self.y = np.matmul(self.unmixing, data)
 
 
     def dynamicWhitening(self, blockdata, dataRange):
-        nPts = blockdata.shape[1]
+        nChs, nPts = blockdata.shape
 
         if self.adaptiveFF['profile'] == 'cooling':
-            lambda_ = self.genCoolingFF(self.state.counter+dataRange, self.adaptiveFF['gamma'], self.adaptiveFF['lambda_0'])
+            lambda_ = self.genCoolingFF(self.counter+dataRange, self.adaptiveFF['gamma'], self.adaptiveFF['lambda_0'])
             if lambda_[0] < self.adaptiveFF['lambda_const']:
                 lambda_ = np.squeeze(np.tile(self.adaptiveFF['lambda_const'], (1, nPts)))
         elif self.adaptiveFF['profile'] == 'constant':
             lambda_ = np.squeeze(np.tile(self.adaptiveFF['lambda_const'], (1, nPts)))
         elif self.adaptiveFF['profile'] == 'adaptive':
-            lambda_ = np.squeeze(np.tile(self.state.lambda_k[-1], (1, nPts)))
+            lambda_ = np.squeeze(np.tile(self.lambda_k[-1], (1, nPts)))
 
+        v = np.matmul(self.icasphere, blockdata) # pre - whitened data
 
-        v = np.matmul(self.state.icasphere, blockdata) # pre - whitened data
-        lambda_avg = 1 - lambda_[int(np.ceil(len(lambda_) / 2))] # median lambda
+        if self.evalConvergence['profile']:
+            modelFitness = np.eye(nChs) + np.matmul(v, v.T)/nPts
+            if len(self.Vn) == 0:
+                self.Vn = modelFitness
+            else:
+                self.Vn = (1 - self.evalConvergence['leakyAvgDelta']) * self.Vn + \
+                                self.evalConvergence['leakyAvgDelta'] * modelFitness
+                #!!! this does not account for block update!
+            self.whiteIdx = la.norm(self.Vn)
+            self.WI.append(self.whiteIdx)
+
+        lambda_avg = 1 - lambda_[int(np.ceil((len(lambda_)-1) / 2))] # median lambda
         QWhite = lambda_avg / (1-lambda_avg) + np.trace(np.matmul(v, v.T)) / nPts
-        self.state.icasphere = 1 / lambda_avg * (self.state.icasphere - np.matmul(v, v.T) / nPts
-                                            / QWhite * self.state.icasphere)
+        self.icasphere = 1 / lambda_avg * (self.icasphere - np.matmul(np.matmul(v, v.T) / nPts / QWhite, self.icasphere))
+
+    def dynamicPCA(self, blockdata, dataRange, method='gha'):
+        nChs, nPts = blockdata.shape
+
+        if self.adaptiveFF['profile'] == 'cooling':
+            lambda_ = self.genCoolingFF(self.counter+dataRange, self.adaptiveFF['gamma'], self.adaptiveFF['lambda_0'])
+            if lambda_[0] < self.adaptiveFF['lambda_const']:
+                lambda_ = np.squeeze(np.tile(self.adaptiveFF['lambda_const'], (1, nPts)))
+        elif self.adaptiveFF['profile'] == 'constant':
+            lambda_ = np.squeeze(np.tile(self.adaptiveFF['lambda_const'], (1, nPts)))
+        elif self.adaptiveFF['profile'] == 'adaptive':
+            lambda_ = np.squeeze(np.tile(self.lambda_k[-1], (1, nPts)))
+
+        v = np.matmul(self.icasphere, blockdata) # pre - whitened data
+
+        if self.evalConvergence['profile']:
+            modelFitness = np.eye(nChs) + np.matmul(v, v.T)/nPts
+            if len(self.Vn) == 0:
+                self.Vn = modelFitness
+            else:
+                self.Vn = (1 - self.evalConvergence['leakyAvgDelta']) * self.Vn + \
+                                self.evalConvergence['leakyAvgDelta'] * modelFitness
+                #!!! this does not account for block update!
+            self.whiteIdx = la.norm(self.Vn)
+            self.WI.append(self.whiteIdx)
+
+        if method == 'gha':
+            U = self.eigvecs
+            U_n1 = U + lambda_[0] * np.matmul(np.dot(blockdata, blockdata.T)/nPts, U)
+            self.eigvecs = U_n1
+            # for (x, g) in zip(blockdata.T, lambda_):
+            #     self.eigvecs, self.eigvals = gha_step(self.eigvals, self.eigvecs, x, g)
+
+        self.icasphere = np.matmul(np.diag(1./np.sqrt(self.eigvals)), self.eigvecs.T)
 
 
     def dynamicOrica(self, blockdata, dataRange, nlfunc=None):
@@ -263,81 +323,83 @@ class ORICA():
         nChs, nPts = blockdata.shape
         f = np.zeros((nChs, nPts))
         # compute source activation using previous weight matrix
-        y = np.matmul(self.state.icaweights, blockdata)
+        y = np.matmul(self.icaweights, blockdata)
 
         # raise Exception()
 
         # choose nonlinear functions for super- vs. sub-gaussian
         if nlfunc is None:
-            f[np.where(self.state.kurtsign==1), :]  = -2 * np.tanh(y[np.where(self.state.kurtsign==1), :])  # Supergaussian
-            f[np.where(self.state.kurtsign==0), :] = 2 * np.tanh(y[np.where(self.state.kurtsign==0), :])  # Subgaussian
+            f[np.where(self.kurtsign==1), :]  = -2 * np.tanh(y[np.where(self.kurtsign==1), :])  # Supergaussian
+            f[np.where(self.kurtsign==0), :] = 2 * np.tanh(y[np.where(self.kurtsign==0), :])  # Subgaussian
         else:
             f = nlfunc(y);
 
         # compute Non-Stationarity Index (nonStatIdx) and variance of source dynamics (Var)
         if self.evalConvergence['profile']:
+            # modelFitness = np.eye(nChs) + np.matmul(y, f.T)/nPts
             modelFitness = np.eye(nChs) + np.matmul(y, f.T)/nPts
-            variance = blockdata * blockdata
-            if len(self.state.Rn) == 0:
-                self.state.Rn = modelFitness
+            if len(self.Rn) == 0:
+                self.Rn = modelFitness
             else:
-                self.state.Rn = (1 - self.evalConvergence['leakyAvgDelta']) * self.state.Rn + \
+                self.Rn = (1 - self.evalConvergence['leakyAvgDelta']) * self.Rn + \
                                 self.evalConvergence['leakyAvgDelta'] * modelFitness
                 #!!! this does not account for block update!
-            self.state.nonStatIdx = la.norm(self.state.Rn)
-            self.NSI.append(self.state.nonStatIdx)
+            self.nonStatIdx = la.norm(self.Rn)
+            self.NSI.append(self.nonStatIdx)
 
 
         if self.adaptiveFF['profile'] == 'cooling':
-            self.state.lambda_k = self.genCoolingFF(self.state.counter + dataRange, self.adaptiveFF['gamma'],
+            self.lambda_k = self.genCoolingFF(self.counter + dataRange, self.adaptiveFF['gamma'],
                                                     self.adaptiveFF['lambda_0'])
-            if self.state.lambda_k[0] < self.adaptiveFF['lambda_const']:
-                self.state.lambda_k = np.squeeze(np.tile(self.adaptiveFF['lambda_const'], (1, nPts)))
-            self.state.counter = self.state.counter + nPts;
+            if self.lambda_k[0] < self.adaptiveFF['lambda_const']:
+                self.lambda_k = np.squeeze(np.tile(self.adaptiveFF['lambda_const'], (1, nPts)))
+            self.counter = self.counter + nPts;
         elif self.adaptiveFF['profile'] == 'constant':
-            self.state.lambda_k = np.arange(nPts) * self.adaptiveFF['lambda_0']
+            self.lambda_k = np.arange(nPts) * self.adaptiveFF['lambda_0']
         elif self.adaptiveFF['profile'] == 'adaptive':
-            if len(self.state.minNonStatIdx) != 0:
-                self.state.minNonStatIdx = self.state.nonStatIdx
-            self.state.minNonStatIdx = np.max([np.min(self.state.minNonStatIdx, self.state.nonStatIdx), 1])
-            ratioOfNormRn = self.state.nonStatIdx / self.state.minNonStatIdx
-            self.state.lambda_k = self.genAdaptiveFF(dataRange, self.state.lambda_k, ratioOfNormRn)
+            if len(self.minNonStatIdx) != 0:
+                self.minNonStatIdx = self.nonStatIdx
+            self.minNonStatIdx = np.max([np.min(self.minNonStatIdx, self.nonStatIdx), 1])
+            ratioOfNormRn = self.nonStatIdx / self.minNonStatIdx
+            self.lambda_k = self.genAdaptiveFF(dataRange, self.lambda_k, ratioOfNormRn)
 
         # update weight matrix using online recursive ICA block update rule
-        lambda_prod = np.prod(1. / (1.-self.state.lambda_k))
-        # Q = 1 + self.state.lambda_k * (np.einsum('km,km->m', f, y)-1);
-        Q = 1 + self.state.lambda_k * (np.sum(f * y, axis=0) - 1);
-        curr_state = self.state.icaweights
+        lambda_prod = np.prod(1. / (1.-self.lambda_k))
+        # Q = 1 + self.lambda_k * (np.einsum('km,km->m', f, y)-1);
+        Q = 1 + self.lambda_k * (np.sum(f * y, axis=0) - 1);
+        curr_state = self.icaweights
 
         self.count += 1
 
         # Compute smoothing factor
         if self.mu != 0:
-            smoothing_matrix = np.zeros(self.state.icaweights.shape)
+            smoothing_matrix = np.zeros(self.icaweights.shape)
             for i, comp in enumerate(smoothing_matrix):
                 for adj in self.adjacency:
-                    smoothing_matrix[i] = 1./len(adj)*np.sum(self.state.icaweights[i, adj])
+                    smoothing_matrix[i] = 1./len(adj)*np.sum(self.icaweights[i, adj])
 
-            self.state.icaweights = lambda_prod * ((self.state.icaweights -
-                                                   np.matmul(np.matmul(np.matmul(y,  np.diag(self.state.lambda_k / Q)),
-                                                             f.T), self.state.icaweights)) -
-                                                   self.mu*(self.state.icaweights - smoothing_matrix)) #- eta*())
+            self.icaweights = lambda_prod * ((self.icaweights -
+                                                   np.matmul(np.matmul(np.matmul(y,  np.diag(self.lambda_k / Q)),
+                                                             f.T), self.icaweights)) -
+                                                   self.mu*(self.icaweights - smoothing_matrix)) #- eta*())
         else:
-            self.state.icaweights = lambda_prod * (self.state.icaweights -
-                                                   np.matmul(np.matmul(np.matmul(y, np.diag(self.state.lambda_k / Q)),
-                                                                    f.T), self.state.icaweights))
+            self.icaweights = lambda_prod * (self.icaweights -
+                                                   np.matmul(np.matmul(np.matmul(y, np.diag(self.lambda_k / Q)),
+                                                                    f.T), self.icaweights))
 
 
         # orthogonalize weight matrix
         if self.ortho:
             try:
-                D, V = eigh(np.matmul(self.state.icaweights, self.state.icaweights.T))
+                D, V = eigh(np.matmul(self.icaweights, self.icaweights.T))
             except LinAlgError:
                 raise Exception()
 
-            # curr_state = self.state.icaweights
-            self.state.icaweights = np.matmul(np.matmul(la.solve(np.diag((np.sqrt(np.abs(D)) * np.sign(D))).T, V.T).T,
-                                                        V.T), self.state.icaweights)
+            # curr_state = self.icaweights
+            self.icaweights = np.matmul(np.matmul(la.solve(np.diag((np.sqrt(np.abs(D)) * np.sign(D))).T, V.T).T,
+                                                        V.T), self.icaweights)
+        else:
+            self.icaweights = self.icaweights / np.max(np.abs(self.icaweights))
 
     def genCoolingFF(self, t, gamma, lambda_0):
         lambda_ = lambda_0 / (t ** gamma)
@@ -360,9 +422,10 @@ class ORICA():
 
 
 class onlineORICAss():
-    def __init__(self, data, fs, ndim='all', forgetfac='cooling', skew_thresh=0.5, lambda_0=0.995, block=8, nsub=0,
-                 ffdecayrate=0.6, verbose=False, weights=None, step_size=1, window=20, initial_window=10,
-                 detect_trheshold=8, onlineDetection=True, evalconverg=True):
+    def __init__(self, data, fs, ndim='all', onlineWhitening=True, calibratePCA=True, forgetfac='cooling',
+                 skew_thresh=0.5, lambda_0=0.995, block=8, nsub=0, ffdecayrate=0.6, verbose=False,
+                 pcaweights=[], weights=[], step_size=1, skew_window=20,
+                 pca_window=10, ica_window=0, detect_trheshold=8, onlineDetection=True, evalconverg=True, numpass=1):
         '''
 
         Parameters
@@ -382,6 +445,9 @@ class onlineORICAss():
         initial_window
         '''
 
+        if numpass > 1:
+            data = np.tile(data, numpass)
+
         nChs, nPts = data.shape
         verbose = verbose
 
@@ -390,17 +456,17 @@ class onlineORICAss():
         else:
             fs = int(fs)
 
-        print(fs)
-
-        self.n_window = int(fs*window)
-        self.n_init_window = int(fs*initial_window)
+        self.n_window = int(fs*skew_window)
+        self.n_pca_window = int(fs*pca_window)
+        self.n_ica_window = int(fs*ica_window)
         self.n_step_size = int(fs*step_size)
 
         self.detect_thresh = detect_trheshold
         self.block = block
+        self.ndim = ndim
 
         # Parameters for data whitening
-        onlineWhitening = True
+        # onlineWhitening = True
         numSubgaussian = nsub
 
         self.adaptiveFF = {'profile': forgetfac, 'tau_const': np.inf, 'gamma': 0.6, 'lambda_0': lambda_0, 'decayRateAlpha': 0.02,
@@ -408,33 +474,43 @@ class onlineORICAss():
         self.evalConvergence = {'profile': evalconverg, 'leakyAvgDelta': 0.01, 'leakyAvgDeltaVar': 1e-3}
 
 
-        if weights is None:
-            weights = np.eye(nChs)
-
         ##############################
         # initialize state variables #
         ##############################
-        icaweights = weights
-        icasphere = np.eye(nChs)
+        if len(weights) == 0:
+            if self.ndim == 'all':
+                icaweights = np.eye(nChs)
+            else:
+                icaweights = np.eye(self.ndim, self.ndim)
+        else:
+            icaweights = weights
 
-        lambda_k = np.zeros((1, block))
-        minNonStatIdx = []
-        nonStatIdx = []
-        Rn = []
-        counter       = 1
-        self.window = window
+        # if len(pcaweights) == 0:
+        # if onlineWhitening:
+        icasphere = np.eye(nChs)
+        # else:
+        #     onlineWhitening = False
+
+        self.lambda_k = np.zeros((1, block))
+
+        if self.evalConvergence['profile']:
+            self.Rn =[]
+            self.nonStatIdx =[]
+            self.minNonStatIdx = []
+            self.Vn=[]
+            self.whiteIdx=[]
+        self.counter       = 1
 
         if self.adaptiveFF['profile'] == 'cooling' or  self.adaptiveFF['profile'] == 'constant':
             self.adaptiveFF['lambda_const']  = 1-np.exp(-1 / (self.adaptiveFF['tau_const']))
 
-        if self.evalConvergence['profile']:
-            Rn =[]
-            nonStatIdx =[]
-
         # sign of kurtosis for each component: true(supergaussian), false(subgaussian)
-        kurtsign = np.ones((nChs, 1))
+        if self.ndim == 'all':
+            self.kurtsign = np.ones((nChs, 1))
+        else:
+            self.kurtsign = np.ones((self.ndim, 1))
         if numSubgaussian != 0:
-            kurtsign[:numSubgaussian] = 0
+            self.kurtsign[:numSubgaussian] = 0
 
         # online estimation
         self.N = 0
@@ -446,14 +522,34 @@ class onlineORICAss():
         ######################
         # sphere-whiten data #
         ######################
-        # Online RLS Whitening
-        if verbose:
-            print('Use online whitening method.')
+        if not calibratePCA:
+            if not onlineWhitening:  # pre - whitening
+                if verbose:
+                    print('Use pre-whitening method.')
+                if self.ndim == 'all':
+                    _, eigvecs, eigvals, sphere = whiten_data(data)
+                    icasphere = sphere
+                else:
+                    _, eigvecs, eigvals, sphere = whiten_data(data, self.ndim)
+                    icasphere = sphere
+                    # data_w = np.zeros((self.ndim, nPts), dtype=float)
+                self.n_pca_window = 0
+            else:  # Online RLS Whitening
+                if verbose:
+                    print('Use online whitening method.')
+        else:
+            if verbose:
+                print('Use initial PCA calibration method.')
+            self.pca_calibrated = False
 
-        data_w = np.zeros_like(data)
-
-        self.state = State(icaweights, icasphere, lambda_k, minNonStatIdx, counter, Rn, nonStatIdx, kurtsign)
+        self.icaweights = icaweights
+        self.icasphere = icasphere
+        self.icasphere_1 = la.pinv(self.icasphere)
         self.skew_thresh = skew_thresh
+        if self.ndim == 'all':
+            self.y_on = np.zeros_like(data)
+        else:
+            self.y_on = np.zeros((self.ndim, nPts))
 
         #########
         # ORICA #
@@ -465,6 +561,8 @@ class onlineORICAss():
         self.w = []
         self.m = []
         self.idx_sources = []
+        self.means = np.zeros(nChs)
+        self.sumx = np.zeros(nChs)
 
         if verbose:
             printflag = 0
@@ -479,24 +577,43 @@ class onlineORICAss():
         self.all_sources = np.array([])
         self.nskews = []
         self.NSI = []
+        self.WI = []
+
         for bi in range(numBlock):
             dataRange = np.arange(int(np.floor(bi * nPts / numBlock)),
                               int(np.min([nPts, np.floor((bi + 1) * nPts / numBlock)])))
-            if onlineWhitening:
-                self.dynamicWhitening(data[:, dataRange], dataRange)
-                data_w[:, dataRange] = np.matmul(self.state.icasphere, data[:, dataRange])
-
             self.N += len(dataRange)
-            self.dynamicOrica(data_w[:, dataRange], dataRange)
-            # self.updateSourceStats(data_w[:, dataRange])
+            self.onlineMean(data[:, dataRange])
+
+            if calibratePCA:
+                self.calibratePCA(data)
+            elif onlineWhitening:
+                self.dynamicWhitening(data[:, dataRange], dataRange)
+
+            if self.N > self.n_pca_window:
+                data_cent = data[:, dataRange] - self.means
+                if self.ndim != 'all':
+                    data_white = np.matmul(self.icasphere[:self.ndim], data_cent)
+                else:
+                    data_white = np.matmul(self.icasphere, data_cent)
+
+                self.dynamicOrica(data_white, dataRange)
+
+            if self.N > self.n_pca_window + self.n_ica_window:
+                # online sources
+                self.y_on[:, dataRange] = np.matmul(self.icaweights, np.matmul(self.icasphere, data_cent))
 
             # select sources
             if not np.mod(self.N, self.n_step_size):
-                if self.N > self.n_init_window:
-                    self.computeStats(data_w)
+                if self.N > self.n_pca_window + self.n_ica_window:
+                    self.computeSkew()
                     idx_sources = np.where(np.abs(self.skew) > self.skew_thresh)
-                    self.w.append(self.state.icaweights)
-                    self.m.append(self.state.icasphere)
+                    self.w.append(self.icaweights)
+                    if self.ndim != 'all':
+                        self.m.append(self.icasphere[:self.ndim])
+                    else:
+                        self.m.append(self.icasphere)
+
                     if len(idx_sources) != 0:
                         self.idx_sources.append(idx_sources[0])
                         self.nskews.append(len(idx_sources[0]))
@@ -509,16 +626,19 @@ class onlineORICAss():
                         self.idx_sources.append([])
                 else:
                     idx_sources = []
-                    self.w.append(self.state.icaweights)
-                    self.m.append(self.state.icasphere)
+                    self.w.append(self.icaweights)
+                    if self.ndim != 'all':
+                        self.m.append(self.icasphere[:self.ndim])
+                    else:
+                        self.m.append(self.icasphere)
                     self.idx_sources.append([])
 
             if verbose:
                 if printflag < np.floor(10 * bi / numBlock):
                     printflag = printflag + 1
                     print(10 * printflag, '%')
-                    if self.N > self.n_init_window:
-                        print('Sources: ', idx_sources)
+                    if self.N > self.n_pca_window + self.n_ica_window and len(self.idx_sources) != 0:
+                        print('Sources: ', self.idx_sources[-1])
 
 
         if verbose:
@@ -534,7 +654,6 @@ class onlineORICAss():
         if not onlineDetection:
             self.spikes = []
 
-        # print(i)
         for (w, m) in zip(self.w, self.m):
             unmixing = np.matmul(w, m)
             mixing = la.pinv(unmixing).T
@@ -545,25 +664,21 @@ class onlineORICAss():
         self.mixing = np.array(self.mixing)
         self.sphere = np.array(self.sphere)
         self.y = np.matmul(self.unmixing[-1], data)
+
         print('Done')
 
 
-    def computeStats(self, data):
-
+    def computeSkew(self):
         if self.N < self.n_window:
-            self.y = np.matmul(self.state.icaweights, data[:, :self.N])
+            y = self.y_on[:, :self.N]
             # skewness for source selection
-            self.skew = stats.skew(self.y, axis=1)
-            # sigma for spike detection
-            self.sigma = np.std(self.y, axis=1)
+            self.skew = stats.skew(y, axis=1)
+            # self.sigma = np.std(y, axis=1)
         else:
-            self.y = np.matmul(self.state.icaweights, data[:, self.N-self.n_window:self.N])
             # skewness for source selection
-            self.skew = stats.skew(self.y, axis=1)
-            # sigma for spike detection
-            self.sigma = np.std(self.y, axis=1)
-
-        self.sigmas.append(self.sigma)
+            y = self.y_on[:, self.N-self.n_window:self.N]
+            self.skew = stats.skew(y, axis=1)
+            # self.sigma = np.std(self.y, axis=1)
         self.skews.append(self.skew)
 
 
@@ -615,16 +730,9 @@ class onlineORICAss():
             self.init = False
 
 
-        # if self.N < self.n_window:
-        #     idx_spikes.append(idx_spike[0][0])
-        # if idx - n_pad > 0 and idx + n_pad < len(s):
-        #     spike = s[idx - n_pad:idx + n_pad]
-        #     t_spike = times[idx - n_pad:idx + n_pad]
-        #     spike_rec = recordings[:, idx - n_pad:idx + n_pad]
-
-
-
-
+    def onlineMean(self, blockdata):
+        self.means = 1. / self.N * (self.sumx[:, np.newaxis] + np.sum(blockdata, axis=1, keepdims=True))
+        self.sumx += np.sum(blockdata, axis=1)
 
     # def updateSourceStats(self, blockdata):
     #
@@ -661,24 +769,46 @@ class onlineORICAss():
     #     self.sigmas.append(self.sigma)
     #     self.skews.append(self.skew)
 
+    def calibratePCA(self, data):
+        if self.N >= self.n_pca_window and not self.pca_calibrated:
+            data_init = data[:, :self.n_pca_window]
+            print('PCA calibration')
+            if self.ndim == 'all':
+                _, eigvecs, eigvals, sphere = whiten_data(data_init)
+            else:
+                _, eigvecs, eigvals, sphere = whiten_data(data_init, self.ndim)
+            self.icasphere = sphere
+            self.pca_calibrated = True
 
 
     def dynamicWhitening(self, blockdata, dataRange):
-        nPts = blockdata.shape[1]
+        nChs, nPts = blockdata.shape
 
         if self.adaptiveFF['profile'] == 'cooling':
-            lambda_ = self.genCoolingFF(self.state.counter+dataRange, self.adaptiveFF['gamma'], self.adaptiveFF['lambda_0'])
+            lambda_ = self.genCoolingFF(self.counter+dataRange, self.adaptiveFF['gamma'], self.adaptiveFF['lambda_0'])
             if lambda_[0] < self.adaptiveFF['lambda_const']:
                 lambda_ = np.squeeze(np.tile(self.adaptiveFF['lambda_const'], (1, nPts)))
         elif self.adaptiveFF['profile'] == 'constant':
             lambda_ = np.squeeze(np.tile(self.adaptiveFF['lambda_const'], (1, nPts)))
 
 
-        v = np.matmul(self.state.icasphere, blockdata) # pre - whitened data
+        v = np.matmul(self.icasphere, blockdata) # pre - whitened data
+
+        if self.evalConvergence['profile']:
+            modelFitness = np.eye(nChs) - np.matmul(v, v.T)/nPts
+            if len(self.Vn) == 0:
+                self.Vn = modelFitness
+            else:
+                self.Vn = (1 - self.evalConvergence['leakyAvgDelta']) * self.Vn + \
+                                self.evalConvergence['leakyAvgDelta'] * modelFitness
+                #!!! this does not account for block update!
+            self.whiteIdx = la.norm(self.Vn)
+            self.WI.append(self.whiteIdx)
+
         lambda_avg = 1 - lambda_[int(np.ceil(len(lambda_) / 2))] # median lambda
         QWhite = lambda_avg / (1-lambda_avg) + np.trace(np.matmul(v, v.T)) / nPts
-        self.state.icasphere = 1 / lambda_avg * (self.state.icasphere - np.matmul(v, v.T) / nPts
-                                            / QWhite * self.state.icasphere)
+        self.icasphere = 1 / lambda_avg * (self.icasphere - np.matmul(np.matmul(v, v.T) / nPts
+                                            / QWhite,self.icasphere))
 
 
     def dynamicOrica(self, blockdata, dataRange, nlfunc=None):
@@ -687,55 +817,55 @@ class onlineORICAss():
         nChs, nPts = blockdata.shape
         f = np.zeros((nChs, nPts))
         # compute source activation using previous weight matrix
-        y = np.matmul(self.state.icaweights, blockdata)
+        y = np.matmul(self.icaweights, blockdata)
 
         # choose nonlinear functions for super- vs. sub-gaussian
         if nlfunc is None:
-            f[np.where(self.state.kurtsign==1), :]  = -2 * np.tanh(y[np.where(self.state.kurtsign==1), :])  # Supergaussian
-            f[np.where(self.state.kurtsign==0), :] = 2 * np.tanh(y[np.where(self.state.kurtsign==0), :])  # Subgaussian
+            f[np.where(self.kurtsign==1), :]  = -2 * np.tanh(y[np.where(self.kurtsign==1), :])  # Supergaussian
+            f[np.where(self.kurtsign==0), :] = 2 * np.tanh(y[np.where(self.kurtsign==0), :])  # Subgaussian
         else:
             f = nlfunc(y);
 
         # compute Non-Stationarity Index (nonStatIdx) and variance of source dynamics (Var)
         if self.evalConvergence['profile']:
-            modelFitness = np.eye(nChs) + np.matmul(y, f.T) / nPts
-            variance = blockdata * blockdata
-            if len(self.state.Rn) == 0:
-                self.state.Rn = modelFitness
+            modelFitness = np.eye(nChs) - np.matmul(y, f.T) / nPts
+            # variance = blockdata * blockdata
+            if len(self.Rn) == 0:
+                self.Rn = modelFitness
             else:
-                self.state.Rn = (1 - self.evalConvergence['leakyAvgDelta']) * self.state.Rn + \
+                self.Rn = (1 - self.evalConvergence['leakyAvgDelta']) * self.Rn + \
                                 self.evalConvergence['leakyAvgDelta'] * modelFitness
                 # !!! this does not account for block update!
-            self.state.nonStatIdx = la.norm(self.state.Rn)
-            self.NSI.append(self.state.nonStatIdx)
+            self.nonStatIdx = la.norm(self.Rn)
+            self.NSI.append(self.nonStatIdx)
 
         if self.adaptiveFF['profile'] == 'cooling':
-            self.state.lambda_k = self.genCoolingFF(self.state.counter + dataRange, self.adaptiveFF['gamma'],
+            self.lambda_k = self.genCoolingFF(self.counter + dataRange, self.adaptiveFF['gamma'],
                                                     self.adaptiveFF['lambda_0'])
-            if self.state.lambda_k[0] < self.adaptiveFF['lambda_const']:
-                self.state.lambda_k = np.squeeze(np.tile(self.adaptiveFF['lambda_const'], (1, nPts)))
-            self.state.counter = self.state.counter + nPts;
+            if self.lambda_k[0] < self.adaptiveFF['lambda_const']:
+                self.lambda_k = np.squeeze(np.tile(self.adaptiveFF['lambda_const'], (1, nPts)))
+            self.counter = self.counter + nPts;
         elif self.adaptiveFF['profile'] == 'constant':
-            self.state.lambda_k = np.arange(nPts) * self.adaptiveFF['lambda_0']
+            self.lambda_k = np.arange(nPts) * self.adaptiveFF['lambda_0']
 
         # update weight matrix using online recursive ICA block update rule
-        lambda_prod = np.prod(1. / (1.-self.state.lambda_k))
-        Q = 1 + self.state.lambda_k * (np.sum(f * y, axis=0) - 1);
-        curr_state = self.state.icaweights
+        lambda_prod = np.prod(1. / (1.-self.lambda_k))
+        Q = 1 + self.lambda_k * (np.sum(f * y, axis=0) - 1);
+        curr_state = self.icaweights
 
-        self.state.icaweights = lambda_prod * (self.state.icaweights -
-                                               np.matmul(np.matmul(np.matmul(y, np.diag(self.state.lambda_k / Q)),
-                                                                f.T), self.state.icaweights))
+        self.icaweights = lambda_prod * (self.icaweights -
+                                               np.matmul(np.matmul(np.matmul(y, np.diag(self.lambda_k / Q)),
+                                                                f.T), self.icaweights))
 
         # orthogonalize weight matrix
         try:
-            D, V = eigh(np.matmul(self.state.icaweights, self.state.icaweights.T))
+            D, V = eigh(np.matmul(self.icaweights, self.icaweights.T))
         except LinAlgError:
             raise Exception()
 
-        # curr_state = self.state.icaweights
-        self.state.icaweights = np.matmul(np.matmul(la.solve(np.diag((np.sqrt(np.abs(D)) * np.sign(D))).T, V.T).T,
-                                                    V.T), self.state.icaweights)
+        # curr_state = self.icaweights
+        self.icaweights = np.matmul(np.matmul(la.solve(np.diag((np.sqrt(np.abs(D)) * np.sign(D))).T, V.T).T,
+                                                    V.T), self.icaweights)
 
     def genCoolingFF(self, t, gamma, lambda_0):
         lambda_ = lambda_0 / (t ** gamma)
@@ -960,8 +1090,8 @@ class ORICA_W():
         v = np.matmul(self.state.icasphere, blockdata) # pre - whitened data
         lambda_avg = 1 - lambda_[int(np.ceil(len(lambda_) / 2))] # median lambda
         QWhite = lambda_avg / (1-lambda_avg) + np.trace(np.matmul(v, v.T)) / nPts
-        self.state.icasphere = 1 / lambda_avg * (self.state.icasphere - np.matmul(v, v.T) / nPts
-                                            / QWhite * self.state.icasphere)
+        self.state.icasphere = 1 / lambda_avg * (self.state.icasphere - np.matmul(np.matmul(v, v.T) / nPts
+                                            / QWhite, self.state.icasphere))
 
     def genCoolingFF(self, t, gamma, lambda_0):
         lambda_ = lambda_0 / (t ** gamma)
@@ -1708,6 +1838,7 @@ class ORICA_A_block():
         self.state.icasphere = 1 / lambda_avg * (self.state.icasphere - np.matmul(v, v.T) / nPts
                                             / QWhite * self.state.icasphere)
 
+
     def dynamicOrica(self, blockdata, dataRange, nlfunc=None):
 
         # initialize
@@ -2026,8 +2157,12 @@ if __name__ == '__main__':
         #              '10.0s_uncorrelated_10.0_5.0Hz_15.0Hz_modulation_noise-all_10-05-2018:11:37_3002/'
         # folder = '/home/alessio/Documents/Codes/SpyICA/recordings/convolution/gtica/SqMEA-10-15um/recording_ica_physrot' \
         #          '_SqMEA-10-15um_20_20.0s_uncorrelated_10.0_5.0Hz_15.0Hz_modulation_noise-all_22-05-2018:14:45_25'
-        folder = '/home/alessio/Documents/Codes/SpyICA/recordings/convolution/gtica/Neuronexus-32-cut-30/recording_ica_' \
-                 'physrot_Neuronexus-32-cut-30_15_60.0s_uncorrelated_10.0_5.0Hz_15.0Hz_modulation_noise-all_29-05-2018:16:38_2416'
+        # folder = '/home/alessio/Documents/Codes/SpyICA/recordings/convolution/gtica/Neuronexus-32-cut-30/recording_ica_' \
+        #          'physrot_Neuronexus-32-cut-30_15_60.0s_uncorrelated_10.0_5.0Hz_15.0Hz_modulation_noise-all_29-05-2018:16:38_2416'
+        # folder= 'recordings/convolution/gtica/SqMEA-10-15um/recording_ica_physrot_SqMEA-10-15um_10_20.0s_' \
+        #         'uncorrelated_5.0_5.0Hz_15.0Hz_modulation_none_13-06-2018:10:22_7593/'
+        folder = 'recordings/convolution/gtica/SqMEA-10-15um/recording_ica_physrot_SqMEA-10-15um_10_120.0s' \
+                 '_uncorrelated_5.0_5.0Hz_15.0Hz_modulation_none_13-06-2018:10:09_6730/'
         block = 1000
         recordings = np.load(join(folder, 'recordings.npy')).astype('int16')
         rec_info = [f for f in os.listdir(folder) if '.yaml' in f or '.yml' in f][0]
@@ -2047,13 +2182,16 @@ if __name__ == '__main__':
         # lambda_val = 0.0001
         lambda_val = 0.995
 
-        ori = onlineORICAss(recordings, fs=fs, forgetfac='cooling', skew_thresh=0.8, lambda_0=lambda_val, verbose=True,
-                            block=block, step_size=1, window=5, initial_window=0, detect_trheshold=10,
-                            onlineDetection=False)
+        orio = onlineORICAss(recordings, fs=fs, forgetfac='cooling', skew_thresh=0.8, lambda_0=lambda_val, verbose=True,
+                             block=block, step_size=1, skew_window=5, detect_trheshold=10, onlineWhitening=False,
+                             calibratePCA=False,
+                             onlineDetection=False, numpass=1, pca_window=False)
 
-        # ori = ORICA(recordings, sphering='offline', forgetfac='cooling',
-        #             verbose=True, numpass=1, block_white=block, block_ica=block)
+        ori = ORICA(recordings, onlineWhitening=False, forgetfac='cooling', pcaonly=False, lambda_0=lambda_val,
+                    verbose=True, numpass=1, block_white=block, block_ica=block)
 
+
+        print('ciao')
     # if len(sys.argv) == 1:
     #     folder = '/home/alessio/Documents/Codes/SpyICA/recordings/convolution/recording_physrot_Neuronexus-32-cut-30_' \
     #              '10_10.0s_uncorrelated_10.0_5.0Hz_15.0Hz_modulated_24-01-2018_22_00'
