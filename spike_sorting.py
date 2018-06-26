@@ -1,5 +1,5 @@
 '''
-
+Spike sorting of neural recordins with various spike sorters
 '''
 import numpy as np
 import os, sys
@@ -90,7 +90,35 @@ class SpikeSorter:
 
         self.minimum_spikes_per_cluster = 15
 
-        if self.rec_name.startswith('recording'):
+        if 'exp' in self.rec_folder:
+            self.recordings = np.load(join(self.rec_folder, 'recordings.npy')).astype('int16')
+            rec_info = [f for f in os.listdir(self.rec_folder) if '.yaml' in f or '.yml' in f][0]
+            with open(join(self.rec_folder, rec_info), 'r') as f:
+                self.info = yaml.load(f)
+
+            self.electrode_name = self.info['General']['electrode name']
+            self.fs = self.info['General']['fs']
+            self.times = (range(self.recordings.shape[1]) / self.fs).rescale('s')
+
+            # self.overlapping = self.info['Synchrony']['overlap_pairs']
+            # if 'overlap' not in self.gtst[0].annotations.keys():
+            #     print 'Finding overlapping spikes'
+            #     annotate_overlapping(self.gtst, overlapping_pairs=self.overlapping)
+
+            # load MEA info
+            elinfo = MEA.return_mea_info(self.electrode_name)
+            self.mea_pos, self.mea_dim, self.mea_pitch = MEA.return_mea(self.electrode_name, sortlist=None)
+            mea_shape = elinfo['shape']
+
+            self.t_start = 0 * pq.s
+            dur = self.info['General']['duration']
+
+            if 's' in dur:
+                self.t_stop = float(dur[:-1]) * pq.s
+            else:
+                self.t_stop = float(self.info['General']['duration']) * pq.s
+
+        elif self.rec_name.startswith('recording'):
             self.gtst = np.load(join(self.rec_folder, 'spiketrains.npy'))
             self.recordings = np.load(join(self.rec_folder, 'recordings.npy')).astype('int16')
             self.templates = np.load(join(self.rec_folder, 'templates.npy'))
@@ -112,15 +140,19 @@ class SpikeSorter:
 
             # load MEA info
             elinfo = MEA.return_mea_info(self.electrode_name)
-
-            x_plane = 0.
-            pos = MEA.get_elcoords(x_plane, **elinfo)
-
             x_plane = 0.
             self.mea_pos = MEA.get_elcoords(x_plane, **elinfo)
             self.mea_pitch = elinfo['pitch']
             self.mea_dim = elinfo['dim']
             mea_shape = elinfo['shape']
+
+            self.t_start = 0 * pq.s
+            dur = self.info['General']['duration']
+
+            if 's' in dur:
+                self.t_stop = float(dur[:-1]) * pq.s
+            else:
+                self.t_stop = float(self.info['General']['duration']) * pq.s
 
         elif self.rec_name.startswith('savedata'):
             f = h5py.File(join(self.rec_folder, 'ViSAPy_filterstep_1.h5'))
@@ -155,6 +187,7 @@ class SpikeSorter:
                                  t_start=self.times[0], t_stop=self.times[-1]))
 
         self.max_idx = self.min_idx = None
+
         if self.tstart or self.tstop or self.duration:
             if self.tstart is not None:
                 self.tstart = float(self.tstart) * pq.s
@@ -192,6 +225,7 @@ class SpikeSorter:
                 self.gtst = sliced_gt
             else:
                 raise Exception('set at least tstop or duration')
+
 
         self.ica = False
         self.orica = False
@@ -276,8 +310,8 @@ class SpikeSorter:
                 if self.clustering=='kmeans' or self.clustering=='mog':
                     # detect spikes and align
                     self.detected_spikes = detect_and_align(spike_sources, self.fs, self.recordings,
-                                                            t_start=self.gtst[0].t_start,
-                                                            t_stop=self.gtst[0].t_stop, n_std=self.threshold)
+                                                            t_start=self.t_start,
+                                                            t_stop=self.t_stop, n_std=self.threshold)
                     self.spike_amps = [sp.annotations['ica_amp'] for sp in self.detected_spikes]
 
                     self.spike_trains, self.amps, self.nclusters, self.keep, self.score = \
@@ -461,7 +495,7 @@ class SpikeSorter:
                             assert len(np.unique(self.firings[0, idx]) == 1)
                             self.counts += len(idx)
                             spike_times = self.ml_times[idx]
-                            spiketrain = neo.SpikeTrain(spike_times, t_start=0 * pq.s, t_stop=self.gtst[0].t_stop)
+                            spiketrain = neo.SpikeTrain(spike_times, t_start=self.t_start, t_stop=self.t_stop)
                             spiketrain.annotate(ica_source=int(np.unique(self.firings[0, idx])) - 1)
                             self.spike_trains.append(spiketrain)
                     # TODO extract waveforms
@@ -469,8 +503,8 @@ class SpikeSorter:
 
                 else:
                     self.detected_spikes = detect_and_align(spike_sources, self.fs, self.recordings,
-                                                            t_start=self.gtst[0].t_start,
-                                                            t_stop=self.gtst[0].t_stop)
+                                                            t_start=self.t_start,
+                                                            t_stop=self.t_stop)
                     self.spike_trains_rej, self.independent_spike_idx, self.dup = \
                         reject_duplicate_spiketrains(self.detected_spikes)
                     self.ica_spike_sources = self.cleaned_sources_ica[self.independent_spike_idx]
@@ -489,28 +523,32 @@ class SpikeSorter:
                 self.W_spike_sources = self.cleaned_W_ica[self.independent_spike_idx]
 
                 if 'ica_wf' not in self.sst[0].annotations.keys():
-                    extract_wf(self.sst, self.ica_spike_sources, self.recordings, self.times, self.fs)
+                    extract_wf(self.sst, self.recordings, self.times, self.fs, ica=True, sources=self.ica_spike_sources)
 
                 self.processing_time = time.time() - t_start_proc
                 print 'Elapsed time: ', self.processing_time
 
-                self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst)
-
-                print 'PAIRS: '
-                print self.pairs
-
-                self.performance =  compute_performance(self.counts)
-
-                if self.plot_figures:
-                    ax1, ax2 = self.plot_results()
-                    ax1.set_title('ICA', fontsize=20)
+                # self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst)
+                #
+                # print 'PAIRS: '
+                # print self.pairs
+                #
+                # self.performance =  compute_performance(self.counts)
+                #
+                # if self.plot_figures:
+                #     ax1, ax2 = self.plot_results()
+                #     ax1.set_title('ICA', fontsize=20)
 
                 # save results
                 if not os.path.isdir(join(self.ica_folder, 'results')):
                     os.makedirs(join(self.ica_folder, 'results'))
-                np.save(join(self.ica_folder, 'results', 'counts'), self.counts)
-                np.save(join(self.ica_folder, 'results', 'performance'), self.performance)
-                np.save(join(self.ica_folder, 'results', 'time'), self.processing_time)
+                if save:
+                    np.save(join(self.ica_folder, 'results', 'sst'), self.sst)
+                    np.save(join(self.ica_folder, 'results', 'time'), self.processing_time)
+                #
+                # np.save(join(self.ica_folder, 'results', 'counts'), self.counts)
+                # np.save(join(self.ica_folder, 'results', 'performance'), self.performance)
+                # np.save(join(self.ica_folder, 'results', 'time'), self.processing_time)
 
         if self.orica:
             # TODO: quantify smoothing with and without mu
@@ -551,8 +589,8 @@ class SpikeSorter:
                 if self.clustering=='kmeans' or self.clustering=='mog':
                     # detect spikes and align
                     self.detected_spikes = detect_and_align(spike_sources, self.fs, self.recordings,
-                                                            t_start=self.gtst[0].t_start,
-                                                            t_stop=self.gtst[0].t_stop, n_std=self.threshold)
+                                                            t_start=self.t_start,
+                                                            t_stop=self.t_stop, n_std=self.threshold)
                     self.spike_amps = [sp.annotations['ica_amp'] for sp in self.detected_spikes]
 
                     self.spike_trains, self.amps, self.nclusters, self.keep, self.score = \
@@ -786,7 +824,7 @@ class SpikeSorter:
                             assert len(np.unique(self.firings[0, idx]) == 1)
                             self.counts += len(idx)
                             spike_times = self.ml_times[idx]
-                            spiketrain = neo.SpikeTrain(spike_times, t_start=0 * pq.s, t_stop=self.gtst[0].t_stop)
+                            spiketrain = neo.SpikeTrain(spike_times, t_start=self.t_start, t_stop=self.t_stop)
                             spiketrain.annotate(ica_source=int(np.unique(self.firings[0, idx]))-1)
                             self.spike_trains.append(spiketrain)
                     self.sst = self.spike_trains
@@ -871,15 +909,15 @@ class SpikeSorter:
                             assert len(np.unique(self.firings[0, idx]) == 1)
                             self.counts += len(idx)
                             spike_times = self.ml_times[idx]
-                            spiketrain = neo.SpikeTrain(spike_times, t_start=0 * pq.s, t_stop=self.gtst[0].t_stop)
+                            spiketrain = neo.SpikeTrain(spike_times, t_start=self.t_start, t_stop=self.t_stop)
                             # spiketrain.annotate(ica_source=int(np.unique(self.firings[0, idx]))-1)
                             self.spike_trains.append(spiketrain)
                     self.spike_trains, self.independent_spike_idx, self.dup = reject_duplicate_spiketrains(self.spike_trains)
                     self.sst = self.spike_trains
                 else:
                     self.spike_trains = detect_and_align(spike_sources, self.fs, self.recordings,
-                                                         t_start=self.gtst[0].t_start,
-                                                         t_stop=self.gtst[0].t_stop)
+                                                         t_start=self.t_start,
+                                                         t_stop=self.t_stop)
                     self.spike_trains, self.independent_spike_idx, self.dup = reject_duplicate_spiketrains(self.spike_trains)
                     self.orica_spike_sources_idx = self.source_idx[self.independent_spike_idx]
                     self.orica_spike_sources = self.cleaned_sources_orica[self.independent_spike_idx]
@@ -901,27 +939,31 @@ class SpikeSorter:
                 # self.orica_smoothing_spike_sources = self.cleaned_smoothing[self.independent_spike_idx]
 
                 if 'ica_wf' not in self.sst[0].annotations.keys():
-                    extract_wf(self.sst, self.orica_spike_sources, self.recordings, self.times, self.fs)
+                    extract_wf(self.sst, self.recordings, self.times, self.fs, ica=True, sources=self.orica_spike_sources)
 
                 # print 'Average smoothing: ', np.mean(self.orica_smoothing_spike_sources), ' mu=', mu
                 print 'Elapsed time: ', time.time() - t_start
 
-                self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst)
-
-                print self.pairs
-
-                self.performance =  compute_performance(self.counts)
-
-                if self.plot_figures:
-                    ax1, ax2 = self.plot_results()
-                    ax1.set_title('ORICA', fontsize=20)
+                # self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst)
+                #
+                # print self.pairs
+                #
+                # self.performance =  compute_performance(self.counts)
+                #
+                # if self.plot_figures:
+                #     ax1, ax2 = self.plot_results()
+                #     ax1.set_title('ORICA', fontsize=20)
 
                 # save results
                 if not os.path.isdir(join(self.orica_folder, 'results')):
                     os.makedirs(join(self.orica_folder, 'results'))
-                np.save(join(self.orica_folder, 'results', 'counts'), self.counts)
-                np.save(join(self.orica_folder, 'results', 'performance'), self.performance)
-                np.save(join(self.orica_folder, 'results', 'time'), self.processing_time)
+                if save:
+                    np.save(join(self.orica_folder, 'results', 'sst'), self.sst)
+                    np.save(join(self.orica_folder, 'results', 'time'), self.processing_time)
+
+                # np.save(join(self.orica_folder, 'results', 'counts'), self.counts)
+                # np.save(join(self.orica_folder, 'results', 'performance'), self.performance)
+                # np.save(join(self.orica_folder, 'results', 'time'), self.processing_time)
 
         if self.orica_online:
             if self.run_ss:
@@ -930,59 +972,114 @@ class SpikeSorter:
                 t_start_proc = time.time()
                 if not os.path.isdir(join(self.rec_folder, 'orica-online')):
                     os.makedirs(join(self.rec_folder, 'orica-online'))
-                self.orica_folder = join(self.rec_folder, 'orica-online')
+                self.orica_online_folder = join(self.rec_folder, 'orica-online')
 
-                self.setting_time = 5
-                self.window = 5
+                self.pca_window = 10
+                self.ica_window = 10
+                self.skew_window = 5
                 self.step = 1
                 self.detection_thresh_online = 10
-                self.skew_thresh_online = 0.8
+                self.skew_thresh_online = 0.5
 
-                self.ori = orICA.onlineORICAss(self.recordings, fs=self.fs, forgetfac='cooling',
-                                               skew_thresh=self.skew_thresh_online, lambda_0=0.995,
-                                               verbose=True, block=self.block, step_size=self.step,
-                                               window=self.window, initial_window=self.setting_time,
-                                               detect_trheshold=self.detection_thresh_online)
+                self.lambda_val = 0.995
+                self.ff = 'cooling'
+
+                online = False
+                detect = True
+                calibPCA = True
+
+                self.ori = orICA.onlineORICAss(self.recordings, fs=self.fs, onlineWhitening=online, calibratePCA=calibPCA,
+                                               forgetfac=self.ff, lambda_0=self.lambda_val,
+                                               numpass=1, block=self.block, step_size=self.step,
+                                               skew_window=self.skew_window, pca_window=self.pca_window,
+                                               ica_window=self.ica_window, verbose=True,
+                                               detect_trheshold=10, onlineDetection=False)
+
+                # self.ori = orICA.onlineORICAss(self.recordings, fs=self.fs, forgetfac='cooling',
+                #                                skew_thresh=self.skew_thresh_online, lambda_0=0.995,
+                #                                verbose=True, block=self.block, step_size=self.step,
+                #                                window=self.window, initial_window=self.setting_time,
+                #                                detect_trheshold=self.detection_thresh_online)
 
                 self.processing_time = time.time() - t_start_proc
 
-                # Convert spikes to neo
-                self.sst = []
-                for (k, t) in zip(self.ori.spikes.keys(), self.ori.spikes.values()):
-                    times = t/self.fs
-                    st = neo.SpikeTrain(times=times, t_start=0*pq.s, t_stop = self.gtst[0].t_stop)
-                    st.annotate(ica_source=k)
-                    self.sst.append(st)
+                last_idxs = find_consistent_sorces(self.ori.source_idx, thresh=0.5)
+                last_idxs = last_idxs[np.argsort(np.abs(stats.skew(self.ori.y[last_idxs], axis=1)))[::-1]]
+                n_id = len(last_idxs)
 
-                self.oorica_spike_sources_idx = np.sort(self.ori.spikes.keys())
+                y_on_selected = self.ori.y_on[last_idxs]
+                self.y_on = np.array(
+                    [-np.sign(sk) * s for (sk, s) in zip(stats.skew(y_on_selected, axis=1), y_on_selected)])
+
+                print 'Rough spike detection to choose thresholds'
+                self.detected_spikes = detect_and_align(self.y_on, self.fs, self.recordings, n_std=8,
+                                                        ref_period=2*pq.ms, upsample=1)
+
+                # Manual thresholding
+                nsamples = int((5 * self.fs.rescale('Hz')).magnitude)
+                self.thresholds = []
+                for i, st in enumerate(self.detected_spikes):
+                    fig = plt.figure()
+                    plt.plot(st.annotations['ica_wf'].T, lw=0.1, color='g')
+                    plt.title('IC  ' + str(i + 1))
+                    coord = plt.ginput()
+                    th = coord[0][1]
+                    plt.close(fig)
+                    self.thresholds.append(th)
+
+                ## User defined thresholds and detection
+                print 'Detecting spikes based on user-defined thresholds'
+                self.spikes = threshold_spike_sorting(self.y_on, self.thresholds)
+
+                # Convert spikes to neo
+                self.spike_trains = []
+                for i, k in enumerate(np.sort(self.spikes.keys())):
+                    t = self.spikes[k]
+                    tt = t / self.fs
+                    st = neo.SpikeTrain(times=tt, t_start=(self.pca_window + self.ica_window) * pq.s, t_stop=self.t_stop)
+                    st.annotate(ica_source=last_idxs[i])
+                    self.spike_trains.append(st)
+
+                self.sst, self.independent_spike_idx, self.dup = reject_duplicate_spiketrains(self.spike_trains)
+
+                print 'Number of spiky sources: ', len(self.spike_trains)
+                print 'Number of spike trains after duplicate rejection: ', len(self.sst)
+
+                self.oorica_spike_sources_idx = last_idxs[self.independent_spike_idx]
                 self.oorica_spike_sources = self.ori.y[self.oorica_spike_sources_idx]
                 self.oorA_spike_sources = self.ori.mixing[-1, self.oorica_spike_sources_idx]
                 self.oorW_spike_sources = self.ori.unmixing[-1, self.oorica_spike_sources_idx]
 
                 if 'ica_wf' not in self.sst[0].annotations.keys():
-                    extract_wf(self.sst, self.oorica_spike_sources, self.recordings, self.times, self.fs)
+                    extract_wf(self.sst, self.recordings, self.times, self.fs, ica=True, sources=self.oorica_spike_sources)
 
                 print 'Elapsed time: ', time.time() - t_start
 
-
-
-                self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst,
-                                                                             t_start=self.setting_time)
-
-                print self.pairs
-
-                self.performance =  compute_performance(self.counts)
-
-                if self.plot_figures:
-                    ax1, ax2 = self.plot_results()
-                    ax1.set_title('ORICA', fontsize=20)
+                # self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst, t_start=self.setting_time)
+                # print self.pairs
+                # self.performance =  compute_performance(self.counts)
+                #
+                # if self.plot_figures:
+                #     ax1, ax2 = self.plot_results()
+                #     ax1.set_title('ORICA', fontsize=20)
 
                 # save results
-                if not os.path.isdir(join(self.orica_folder, 'results')):
-                    os.makedirs(join(self.orica_folder, 'results'))
-                np.save(join(self.orica_folder, 'results', 'counts'), self.counts)
-                np.save(join(self.orica_folder, 'results', 'performance'), self.performance)
-                np.save(join(self.orica_folder, 'results', 'time'), self.processing_time)
+                if not os.path.isdir(join(self.orica_online_folder, 'results')):
+                    os.makedirs(join(self.orica_online_folder, 'results'))
+                if save:
+                    np.save(join(self.orica_online_folder, 'results', 'sst'), self.sst)
+                    np.save(join(self.orica_online_folder, 'results', 'y_on'), self.y_on)
+                    np.save(join(self.orica_online_folder, 'results', 'y'), self.oorica_spike_sources)
+                    np.save(join(self.orica_online_folder, 'results', 'mixing'), self.oorA_spike_sources)
+                    np.save(join(self.orica_online_folder, 'results', 'time'), self.processing_time)
+
+                    with open(join(self.orica_online_folder, 'orica_params.yaml'), 'w') as f:
+                        orica_par = {'pca_window': self.pca_window, 'ica_window': self.ica_window,
+                                     'skew_window': self.skew_window, 'step': self.step,
+                                     'skew_thresh': self.skew_thresh_online, 'lambda_val': self.lambda_val,
+                                     'ff': self.ff}
+                        yaml.dump(orica_par, f)
+
 
         if self.threshold_online:
             if self.run_ss:
@@ -1002,7 +1099,7 @@ class SpikeSorter:
                 self.sst = []
                 for (k, t) in zip(self.spikes.keys(), self.spikes.values()):
                     times = t/self.fs
-                    st = neo.SpikeTrain(times=times, t_start=0*pq.s, t_stop = self.gtst[0].t_stop)
+                    st = neo.SpikeTrain(times=times, t_start=0*pq.s, t_stop = self.t_stop)
                     st.annotate(electrode=k)
                     self.sst.append(st)
 
@@ -1050,8 +1147,8 @@ class SpikeSorter:
                 if self.clustering=='kmeans' or self.clustering=='mog':
                     # detect spikes and align
                     self.detected_spikes = detect_and_align(spike_sources, self.fs, self.recordings,
-                                                            t_start=self.gtst[0].t_start,
-                                                            t_stop=self.gtst[0].t_stop, n_std=self.threshold)
+                                                            t_start=self.t_start,
+                                                            t_stop=self.t_stop, n_std=self.threshold)
                     self.spike_amps = [sp.annotations['ica_amp'] for sp in self.detected_spikes]
 
                     self.spike_trains, self.amps, self.nclusters, self.keep, self.score = \
@@ -1062,8 +1159,8 @@ class SpikeSorter:
                         reject_duplicate_spiketrains(self.spike_trains)
                 else:
                     self.spike_trains = detect_and_align(spike_sources, self.fs, self.recordings,
-                                                         t_start=self.gtst[0].t_start,
-                                                         t_stop=self.gtst[0].t_stop)
+                                                         t_start=self.t_start,
+                                                         t_stop=self.t_stop)
                     self.spike_trains, self.independent_spike_idx = reject_duplicate_spiketrains(self.spike_trains)
                     self.orica_spike_sources_idx = self.source_idx[self.independent_spike_idx]
                     self.orica_spike_sources = self.cleaned_sources_orica[self.independent_spike_idx]
@@ -1153,25 +1250,28 @@ class SpikeSorter:
                 else:
                     raise Exception('No kwik file!')
 
-                self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst)
-
-                print 'PAIRS: '
-                print self.pairs
-
-                self.performance =  compute_performance(self.counts)
-
-                if self.plot_figures:
-                    ax1, ax2 = self.plot_results()
-                    ax1.set_title('KLUSTA', fontsize=20)
+                # self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst)
+                #
+                # print 'PAIRS: '
+                # print self.pairs
+                #
+                # self.performance =  compute_performance(self.counts)
+                #
+                # if self.plot_figures:
+                #     ax1, ax2 = self.plot_results()
+                #     ax1.set_title('KLUSTA', fontsize=20)
 
                 print 'Elapsed time: ', time.time() - t_start
 
                 # save results
                 if not os.path.isdir(join(self.klusta_folder, 'results')):
                     os.makedirs(join(self.klusta_folder, 'results'))
-                np.save(join(self.klusta_folder, 'results', 'counts'), self.counts)
-                np.save(join(self.klusta_folder, 'results', 'performance'), self.performance)
-                np.save(join(self.klusta_folder, 'results', 'time'), self.processing_time)
+                if save:
+                    np.save(join(self.klusta_folder, 'results', 'sst'), self.sst)
+                    np.save(join(self.klusta_folder, 'results', 'time'), self.processing_time)
+                # np.save(join(self.klusta_folder, 'results', 'counts'), self.counts)
+                # np.save(join(self.klusta_folder, 'results', 'performance'), self.performance)
+                # np.save(join(self.klusta_folder, 'results', 'time'), self.processing_time)
 
 
         if self.kilo:
@@ -1269,7 +1369,7 @@ class SpikeSorter:
                         self.spike_templates.append(self.kl_templates[clust])
                         self.counts += len(idx)
                         spike_times = self.kl_times[idx]
-                        spiketrain = neo.SpikeTrain(spike_times, t_start=0 * pq.s, t_stop=self.gtst[0].t_stop)
+                        spiketrain = neo.SpikeTrain(spike_times, t_start=self.t_start, t_stop=self.t_stop)
                         self.spike_trains.append(spiketrain)
 
                 self.spike_templates = np.array(self.spike_templates)
@@ -1279,26 +1379,30 @@ class SpikeSorter:
                 # print 'Found ', len(self.sst), ' independent spiketrains!'
                 self.sst = self.spike_trains
 
-                print 'Evaluating spiketrains...'
-                self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst)
-
-                print 'PAIRS: '
-                print self.pairs
-
-                self.performance = compute_performance(self.counts)
-
-                if self.plot_figures:
-                    ax1, ax2 = self.plot_results()
-                    ax1.set_title('KILOSORT', fontsize=20)
+                # print 'Evaluating spiketrains...'
+                # self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst)
+                #
+                # print 'PAIRS: '
+                # print self.pairs
+                #
+                # self.performance = compute_performance(self.counts)
+                #
+                # if self.plot_figures:
+                #     ax1, ax2 = self.plot_results()
+                #     ax1.set_title('KILOSORT', fontsize=20)
 
                 print 'Total elapsed time: ', time.time() - t_start
 
                 # save results
                 if not os.path.isdir(join(self.kilo_folder, 'results')):
                     os.makedirs(join(self.kilo_folder, 'results'))
-                np.save(join(self.kilo_folder, 'results', 'counts'), self.counts)
-                np.save(join(self.kilo_folder, 'results', 'performance'), self.performance)
-                np.save(join(self.kilo_folder, 'results', 'time'), self.processing_time)
+                if save:
+                    np.save(join(self.kilo_folder, 'results', 'sst'), self.sst)
+                    np.save(join(self.kilo_folder, 'results', 'time'), self.processing_time)
+
+                # np.save(join(self.kilo_folder, 'results', 'counts'), self.counts)
+                # np.save(join(self.kilo_folder, 'results', 'performance'), self.performance)
+                # np.save(join(self.kilo_folder, 'results', 'time'), self.processing_time)
 
 
         if self.mountain:
@@ -1380,33 +1484,40 @@ class SpikeSorter:
                         idx = np.where(self.firings[2] == clust)[0]
                         self.counts += len(idx)
                         spike_times = self.ml_times[idx]
-                        spiketrain = neo.SpikeTrain(spike_times, t_start=0 * pq.s, t_stop=self.gtst[0].t_stop)
+                        spiketrain = neo.SpikeTrain(spike_times, t_start=self.t_start, t_stop=self.t_stop)
                         self.spike_trains.append(spiketrain)
 
-                print 'Finding independent spiketrains...'
-                self.sst, self.independent_spike_idx, self.dup = reject_duplicate_spiketrains(self.spike_trains)
+                # print 'Finding independent spiketrains...'
+                # self.sst, self.independent_spike_idx, self.dup = reject_duplicate_spiketrains(self.spike_trains)
+                self.sst = self.spike_trains
                 print 'Found ', len(self.sst), ' independent spiketrains!'
 
-                print 'Evaluating spiketrains...'
-                self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst)
+                print 'Extracting waveforms'
+                extract_wf(self.sst, self.recordings, self.times, self.fs)
 
-                print 'PAIRS: '
-                print self.pairs
-
-                self.performance =  compute_performance(self.counts)
-
-                if self.plot_figures:
-                    ax1, ax2 = self.plot_results()
-                    ax1.set_title('MOUNTAINSORT', fontsize=20)
+                # print 'Evaluating spiketrains...'
+                # self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst)
+                #
+                # print 'PAIRS: '
+                # print self.pairs
+                #
+                # self.performance =  compute_performance(self.counts)
+                #
+                # if self.plot_figures:
+                #     ax1, ax2 = self.plot_results()
+                #     ax1.set_title('MOUNTAINSORT', fontsize=20)
 
                 print 'Total elapsed time: ', time.time() - t_start
 
                 # save results
                 if not os.path.isdir(join(self.mountain_folder, 'results')):
                     os.makedirs(join(self.mountain_folder, 'results'))
-                np.save(join(self.mountain_folder, 'results', 'counts'), self.counts)
-                np.save(join(self.mountain_folder, 'results', 'performance'), self.performance)
-                np.save(join(self.mountain_folder, 'results', 'time'), self.processing_time)
+                if save:
+                    np.save(join(self.mountain_folder, 'results', 'sst'), self.sst)
+                    np.save(join(self.mountain_folder, 'results', 'time'), self.processing_time)
+                # np.save(join(self.mountain_folder, 'results', 'counts'), self.counts)
+                # np.save(join(self.mountain_folder, 'results', 'performance'), self.performance)
+                # np.save(join(self.mountain_folder, 'results', 'time'), self.processing_time)
 
         if self.circus:
             print 'Applying Spyking-circus algorithm'
@@ -1490,7 +1601,7 @@ class SpikeSorter:
                     self.counts += count
                     if count > self.minimum_spikes_per_cluster:
                         spike_times = self.times[sorted(st)]
-                        spiketrain = neo.SpikeTrain(spike_times, t_start=0 * pq.s, t_stop=self.gtst[0].t_stop)
+                        spiketrain = neo.SpikeTrain(spike_times, t_start=self.t_start, t_stop=self.t_stop)
                         self.spike_trains.append(spiketrain)
                     else:
                         print 'Discarded spike train ', i_st
@@ -1498,26 +1609,30 @@ class SpikeSorter:
                 self.sst = self.spike_trains
                 print 'Found ', len(self.sst), ' independent spiketrains!'
 
-                print 'Evaluating spiketrains...'
-                self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst)
-
-                print 'PAIRS: '
-                print self.pairs
-
-                self.performance =  compute_performance(self.counts)
-
-                if self.plot_figures:
-                    ax1, ax2 = self.plot_results()
-                    ax1.set_title('SPYKING-CIRCUS', fontsize=20)
+                # print 'Evaluating spiketrains...'
+                # self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst)
+                #
+                # print 'PAIRS: '
+                # print self.pairs
+                #
+                # self.performance =  compute_performance(self.counts)
+                #
+                # if self.plot_figures:
+                #     ax1, ax2 = self.plot_results()
+                #     ax1.set_title('SPYKING-CIRCUS', fontsize=20)
 
                 print 'Elapsed time: ', time.time() - t_start
 
                 # save results
                 if not os.path.isdir(join(self.spykingcircus_folder, 'results')):
                     os.makedirs(join(self.spykingcircus_folder, 'results'))
-                np.save(join(self.spykingcircus_folder, 'results', 'counts'), self.counts)
-                np.save(join(self.spykingcircus_folder, 'results','performance'), self.performance)
-                np.save(join(self.spykingcircus_folder, 'results', 'time'), self.processing_time)
+                if save:
+                    np.save(join(self.spykingcircus_folder, 'results', 'sst'), self.sst)
+                    np.save(join(self.spykingcircus_folder, 'results', 'time'), self.processing_time)
+
+                # np.save(join(self.spykingcircus_folder, 'results', 'counts'), self.counts)
+                # np.save(join(self.spykingcircus_folder, 'results','performance'), self.performance)
+                # np.save(join(self.spykingcircus_folder, 'results', 'time'), self.processing_time)
 
 
         if self.yass:
@@ -1593,7 +1708,7 @@ class SpikeSorter:
                         idx = np.where(self.spike_clusters == clust)[0]
                         self.counts += len(idx)
                         spike_times = self.times[np.array(self.spike_times)[idx]]
-                        spiketrain = neo.SpikeTrain(spike_times, t_start=0 * pq.s, t_stop=self.gtst[0].t_stop)
+                        spiketrain = neo.SpikeTrain(spike_times, t_start=self.t_start, t_stop=self.t_stop)
                         self.spike_trains.append(spiketrain)
 
                 self.sst = self.spike_trains
@@ -1632,254 +1747,6 @@ class SpikeSorter:
 
         fig.tight_layout()
         return ax1, ax2
-
-def compute_performance(counts):
-
-    tp_rate = float(counts['TP']) / counts['TOT_GT'] * 100
-    tpo_rate = float(counts['TPO']) / counts['TOT_GT'] * 100
-    tpso_rate = float(counts['TPSO']) / counts['TOT_GT'] * 100
-    tot_tp_rate = float(counts['TP'] + counts['TPO'] + counts['TPSO']) / counts['TOT_GT'] * 100
-
-    cl_rate = float(counts['CL']) / counts['TOT_GT'] * 100
-    clo_rate = float(counts['CLO']) / counts['TOT_GT'] * 100
-    clso_rate = float(counts['CLSO']) / counts['TOT_GT'] * 100
-    tot_cl_rate = float(counts['CL'] + counts['CLO'] + counts['CLSO']) / counts['TOT_GT'] * 100
-
-    fn_rate = float(counts['FN']) / counts['TOT_GT'] * 100
-    fno_rate = float(counts['FNO']) / counts['TOT_GT'] * 100
-    fnso_rate = float(counts['FNSO']) / counts['TOT_GT'] * 100
-    tot_fn_rate = float(counts['FN'] + counts['FNO'] + counts['FNSO']) / counts['TOT_GT'] * 100
-
-    fp_gt = float(counts['FP']) / counts['TOT_GT'] * 100
-    fp_st = float(counts['FP']) / counts['TOT_ST'] * 100
-
-    accuracy = tot_tp_rate / (tot_tp_rate + tot_fn_rate + fp_gt) * 100
-    sensitivity = tot_tp_rate / (tot_tp_rate + tot_fn_rate) * 100
-    miss_rate = tot_fn_rate / (tot_tp_rate + tot_fn_rate) * 100
-    precision = tot_tp_rate / (tot_tp_rate + fp_gt) * 100
-    false_discovery_rate = fp_gt / (tot_tp_rate + fp_gt) * 100
-
-    print 'PERFORMANCE: \n'
-    print '\nTP: ', tp_rate, ' %'
-    print 'TPO: ', tpo_rate, ' %'
-    print 'TPSO: ', tpso_rate, ' %'
-    print 'TOT TP: ', tot_tp_rate, ' %'
-
-    print '\nCL: ', cl_rate, ' %'
-    print 'CLO: ', clo_rate, ' %'
-    print 'CLSO: ', clso_rate, ' %'
-    print 'TOT CL: ', tot_cl_rate, ' %'
-
-    print '\nFN: ', fn_rate, ' %'
-    print 'FNO: ', fno_rate, ' %'
-    print 'FNSO: ', fnso_rate, ' %'
-    print 'TOT FN: ', tot_fn_rate, ' %'
-
-    print '\nFP (%GT): ', fp_gt, ' %'
-    print '\nFP (%ST): ', fp_st, ' %'
-
-    print '\nACCURACY: ', accuracy, ' %'
-    print 'SENSITIVITY: ', sensitivity, ' %'
-    print 'MISS RATE: ', miss_rate, ' %'
-    print 'PRECISION: ', precision, ' %'
-    print 'FALSE DISCOVERY RATE: ', false_discovery_rate, ' %'
-
-    performance = {'tot_tp': tot_tp_rate, 'tot_cl': tot_cl_rate, 'tot_fn': tot_fn_rate, 'tot_fp': fp_gt,
-                   'accuracy': accuracy, 'sensitivity': sensitivity, 'precision': precision, 'miss_rate': miss_rate,
-                   'false_disc_rate': false_discovery_rate}
-
-    return performance
-
-
-def plot_mixing(mixing, mea_pos, mea_dim, gs=None, fig=None):
-    '''
-
-    Parameters
-    ----------
-    mixing
-    mea_pos
-    mea_dim
-    mea_pitch
-
-    Returns
-    -------
-
-    '''
-    from neuroplot import plot_weight
-
-    n_sources = len(mixing)
-    cols = int(np.ceil(np.sqrt(n_sources)))
-    rows = int(np.ceil(n_sources / float(cols)))
-
-    if fig is None and gs is None:
-        fig = plt.figure()
-
-    if gs is not None:
-        from matplotlib import gridspec
-        gs_plot = gridspec.GridSpecFromSubplotSpec(rows, cols, subplot_spec=gs)
-
-    for n in range(n_sources):
-        if gs is not None:
-            ax_w = fig.add_subplot(gs_plot[n])
-        else:
-            ax_w = fig.add_subplot(rows, cols, n+1)
-        mix = mixing[n]/np.ptp(mixing[n])
-        plot_weight(mix, mea_dim, ax=ax_w)
-
-    return fig
-
-
-def play_mixing(mixing, mea_pos, mea_dim):
-    '''
-
-    Parameters
-    ----------
-    mixing
-    mea_pos
-    mea_dim
-    mea_pitch
-
-    Returns
-    -------
-
-    '''
-    from neuroplot import plot_weight
-
-    n_sources = len(mixing)
-    cols = int(np.ceil(np.sqrt(n_sources)))
-    rows = int(np.ceil(n_sources / float(cols)))
-    fig_t = plt.figure()
-
-    anim = []
-
-    for n in range(n_sources):
-        ax_w = fig_t.add_subplot(rows, cols, n+1)
-        mix = mixing[n]/np.ptp(mixing[n])
-        im = play_spike(mix, mea_dim, ax=ax_w, fig=fig_t)
-        anim.append(im)
-
-    return fig_t
-
-
-def plot_templates(templates, mea_pos, mea_pitch, single_figure=True):
-    '''
-
-    Parameters
-    ----------
-    templates
-    mea_pos
-    mea_pitch
-
-    Returns
-    -------
-
-    '''
-    from neuroplot import plot_weight
-
-    n_sources = len(templates)
-    fig_t = plt.figure()
-
-    if single_figure:
-        colors = plt.rcParams['axes.color_cycle']
-        ax_t = fig_t.add_subplot(111)
-
-        for n, t in enumerate(templates):
-            print 'Plotting spike ', n, ' out of ', n_sources
-            if len(t.shape) == 3:
-                # plot_mea_recording(w[:5], mea_pos, mea_pitch, colors=colors[np.mod(n, len(colors))], ax=ax_w, lw=0.1)
-                plot_mea_recording(t.mean(axis=0), mea_pos, mea_pitch, colors=colors[np.mod(n, len(colors))], ax=ax_t, lw=2)
-            else:
-                plot_mea_recording(t, mea_pos, mea_pitch, colors=colors[np.mod(n, len(colors))], ax=ax_t, lw=2)
-
-    else:
-        cols = int(np.ceil(np.sqrt(n_sources)))
-        rows = int(np.ceil(n_sources / float(cols)))
-
-        for n in range(n_sources):
-            ax_t = fig_t.add_subplot(rows, cols, n+1)
-            plot_mea_recording(templates[n], mea_pos, mea_pitch, ax=ax_t)
-
-    return fig_t
-
-
-
-def templates_weights(templates, weights, mea_pos, mea_dim, mea_pitch, pairs=None):
-    '''
-
-    Parameters
-    ----------
-    templates
-    weights
-    pairs
-    mea_pos
-    mea_dim
-    mea_pitch
-
-    Returns
-    -------
-
-    '''
-    from matplotlib import gridspec
-    n_neurons = len(templates)
-    gs0 = gridspec.GridSpec(1, 2)
-
-    cols = int(np.ceil(np.sqrt(n_neurons)))
-    rows = int(np.ceil(n_neurons / float(cols)))
-
-    gs_t = gridspec.GridSpecFromSubplotSpec(rows, cols, subplot_spec=gs0[0])
-    gs_w = gridspec.GridSpecFromSubplotSpec(rows, cols, subplot_spec=gs0[1])
-    fig_t = plt.figure()
-
-    min_v = np.min(templates)
-
-    for n in range(n_neurons):
-        ax_t = fig_t.add_subplot(gs_t[n])
-        ax_w = fig_t.add_subplot(gs_w[n])
-
-        plot_mea_recording(templates[n], mea_pos, mea_pitch, ax=ax_t)
-        if pairs is not None:
-            if pairs[n, 0] != -1:
-                plot_weight(weights[pairs[n, 1]], mea_dim, ax=ax_w)
-            else:
-                ax_w.axis('off')
-        else:
-            plot_weight(weights[n], mea_dim, ax=ax_w)
-
-    return fig_t
-
-def plot_ic_waveforms(spiketrains):
-    ica_sources = [s.annotations['ica_source'] for s in spiketrains]
-    sources = np.unique(ica_sources)
-    n_sources = len(sources)
-    cols = int(np.ceil(np.sqrt(n_sources)))
-    rows = int(np.ceil(n_sources / float(cols)))
-    fig_t = plt.figure()
-    colors = plt.rcParams['axes.color_cycle']
-
-    for n, s in enumerate(sources):
-        ax_t = fig_t.add_subplot(rows, cols, n + 1)
-
-        count = 0
-        for st, ic in enumerate(ica_sources):
-            if ic == s:
-                ax_t.plot(spiketrains[st].annotations['ica_wf'].T, color=colors[count], lw=0.2)
-                ax_t.plot(np.mean(spiketrains[st].annotations['ica_wf'], axis=0), color=colors[count], lw=1)
-                count += 1
-
-    return fig_t
-
-def plot_waveforms(spiketrains, mea_pos, mea_pitch):
-    wf = [s.waveforms for s in spiketrains]
-    fig_w = plt.figure()
-    ax_w = fig_w.add_subplot(111)
-    colors = plt.rcParams['axes.color_cycle']
-
-    for n, w in enumerate(wf):
-        print 'Plotting spike ', n, ' out of ', len(wf)
-        # plot_mea_recording(w[:5], mea_pos, mea_pitch, colors=colors[np.mod(n, len(colors))], ax=ax_w, lw=0.1)
-        plot_mea_recording(w.mean(axis=0), mea_pos, mea_pitch, colors=colors[np.mod(n, len(colors))], ax=ax_w, lw=2)
-
-    return fig_w
 
 
 if __name__ == '__main__':
@@ -1989,7 +1856,7 @@ if __name__ == '__main__':
     elif '-r' not in sys.argv and not debug:
         raise AttributeError('Provide model folder for data')
     else:
-        sps = SpikeSorter(save=False, rec_folder=rec_folder, alg=mod, duration=dur,
+        sps = SpikeSorter(save=save, rec_folder=rec_folder, alg=mod, duration=dur,
                           tstart=tstart, tstop=tstop, run_ss=spikesort, plot_figures=plot_figures,
                           merge_spikes=merge_spikes, mu=mu, eta=eta, npass=npass, block=block, feat=feat,
                           clust=clust, keepall=keepall, ndim=ndim)

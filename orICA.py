@@ -547,9 +547,9 @@ class onlineORICAss():
         self.icasphere_1 = la.pinv(self.icasphere)
         self.skew_thresh = skew_thresh
         if self.ndim == 'all':
-            self.y_on = np.zeros_like(data)
+            self.y_on = np.zeros_like(data, dtype=float)
         else:
-            self.y_on = np.zeros((self.ndim, nPts))
+            self.y_on = np.zeros((self.ndim, nPts), dtype=float)
 
         #########
         # ORICA #
@@ -2076,7 +2076,7 @@ def instICA(X, n_comp='all', n_chunks=1, chunk_size=None, numpass=1, block_size=
         X_reduced = X
 
     if mode == 'original':
-        orica = ORICA(X_reduced, ndim=n_comp, sphering='offline', verbose=True, numpass=numpass,
+        orica = ORICA(X_reduced, ndim=n_comp, onlineWhitening=False, verbose=True, numpass=numpass,
                       block_white=block_size, block_ica=block_size, adjacency=adjacency_graph, mu=mu)
     elif mode == 'W_block':
         orica = ORICA(X_reduced, ndim=n_comp, sphering='offline', verbose=True, numpass=numpass,

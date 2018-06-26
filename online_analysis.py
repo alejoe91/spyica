@@ -13,96 +13,9 @@ from scipy.linalg import LinAlgError
 from sklearn.decomposition import PCA
 from spike_sorting import *
 import pandas as pd
+from tools import *
 
 import orICA as orica
-
-
-def compute_performance(counts):
-
-    tp_rate = float(counts['TP']) / counts['TOT_GT'] * 100
-    tpo_rate = float(counts['TPO']) / counts['TOT_GT'] * 100
-    tpso_rate = float(counts['TPSO']) / counts['TOT_GT'] * 100
-    tot_tp_rate = float(counts['TP'] + counts['TPO'] + counts['TPSO']) / counts['TOT_GT'] * 100
-
-    cl_rate = float(counts['CL']) / counts['TOT_GT'] * 100
-    clo_rate = float(counts['CLO']) / counts['TOT_GT'] * 100
-    clso_rate = float(counts['CLSO']) / counts['TOT_GT'] * 100
-    tot_cl_rate = float(counts['CL'] + counts['CLO'] + counts['CLSO']) / counts['TOT_GT'] * 100
-
-    fn_rate = float(counts['FN']) / counts['TOT_GT'] * 100
-    fno_rate = float(counts['FNO']) / counts['TOT_GT'] * 100
-    fnso_rate = float(counts['FNSO']) / counts['TOT_GT'] * 100
-    tot_fn_rate = float(counts['FN'] + counts['FNO'] + counts['FNSO']) / counts['TOT_GT'] * 100
-
-    fp_gt = float(counts['FP']) / counts['TOT_GT'] * 100
-    fp_st = float(counts['FP']) / counts['TOT_ST'] * 100
-
-    accuracy = tot_tp_rate / (tot_tp_rate + tot_fn_rate + fp_gt) * 100
-    sensitivity = tot_tp_rate / (tot_tp_rate + tot_fn_rate) * 100
-    miss_rate = tot_fn_rate / (tot_tp_rate + tot_fn_rate) * 100
-    precision = tot_tp_rate / (tot_tp_rate + fp_gt) * 100
-    false_discovery_rate = fp_gt / (tot_tp_rate + fp_gt) * 100
-
-    print('PERFORMANCE: \n')
-    print('\nTP: ', tp_rate, ' %')
-    print('TPO: ', tpo_rate, ' %')
-    print('TPSO: ', tpso_rate, ' %')
-    print('TOT TP: ', tot_tp_rate, ' %')
-
-    print('\nCL: ', cl_rate, ' %')
-    print('CLO: ', clo_rate, ' %')
-    print('CLSO: ', clso_rate, ' %')
-    print('TOT CL: ', tot_cl_rate, ' %')
-
-    print('\nFN: ', fn_rate, ' %')
-    print('FNO: ', fno_rate, ' %')
-    print('FNSO: ', fnso_rate, ' %')
-    print('TOT FN: ', tot_fn_rate, ' %')
-
-    print('\nFP (%GT): ', fp_gt, ' %')
-    print('\nFP (%ST): ', fp_st, ' %')
-
-    print('\nACCURACY: ', accuracy, ' %')
-    print('SENSITIVITY: ', sensitivity, ' %')
-    print('MISS RATE: ', miss_rate, ' %')
-    print('PRECISION: ', precision, ' %')
-    print('FALSE DISCOVERY RATE: ', false_discovery_rate, ' %')
-
-    performance = {'tot_tp': tot_tp_rate, 'tot_cl': tot_cl_rate, 'tot_fn': tot_fn_rate, 'tot_fp': fp_gt,
-                   'accuracy': accuracy, 'sensitivity': sensitivity, 'precision': precision, 'miss_rate': miss_rate,
-                   'false_disc_rate': false_discovery_rate}
-
-    return performance
-
-
-def find_consistent_sorces(source_idx, thresh=0.5):
-    '''
-    Returns sources that appear at least thresh % of the times
-    Parameters
-    ----------
-    source_idx
-    thresh
-
-    Returns
-    -------
-
-    '''
-    len_no_empty = len([s for s in source_idx if len(s)>0])
-
-    s_dict = {}
-    for s in source_idx:
-        for id in s:
-            if id not in s_dict.keys():
-                s_dict.update({id: 1})
-            else:
-                s_dict[id] += 1
-
-    consistent_sources = []
-    for id in s_dict.keys():
-        if s_dict[id] >= thresh*len_no_empty:
-            consistent_sources.append(id)
-
-    return np.sort(consistent_sources)
 
 
 if __name__ == '__main__':
@@ -125,10 +38,10 @@ if __name__ == '__main__':
     else:
         ndim = 'all'
 
-    plot_fig = True
+    plot_fig = False
     save_res = False
     save_perf = False
-    paper_fig = True
+    paper_fig = False
     resfile = 'results.csv'
 
     # folder = 'recordings/convolution/gtica/Neuronexus-32-cut-30/recording_ica_physrot_Neuronexus-32-cut-30_10_' \
@@ -137,7 +50,6 @@ if __name__ == '__main__':
     #          '_SqMEA-10-15um_20_20.0s_uncorrelated_10.0_5.0Hz_15.0Hz_modulation_noise-all_22-05-2018:14:45_25'
     # folder = '/home/alessio/Documents/Codes/SpyICA/recordings/convolution/gtica/Neuronexus-32-cut-30/recording_ica_' \
     #          'physrot_Neuronexus-32-cut-30_15_60.0s_uncorrelated_10.0_5.0Hz_15.0Hz_modulation_noise-all_29-05-2018:16:38_2416'
-
     # folder = 'recordings/convolution/gtica/SqMEA-10-15um/recording_ica_physrot_Sq' \
     #          'MEA-10-15um_10_20.0s_uncorrelated_5.0_5.0Hz_15.0Hz_modulation_none_13-06-2018:10:22_7593/'
 
@@ -182,7 +94,7 @@ if __name__ == '__main__':
     processing_time = time.time() - start_time
 
 
-    ## Time analysis
+    ## Convergence analysis
     a = ori.mixing[-1]
 
     a_t = np.zeros(a.shape)
@@ -223,16 +135,7 @@ if __name__ == '__main__':
     print('Normalized cumulative correlation ID - mixing: ', mix_CC_mean_id)
     print('Normalized cumulative correlation - sources: ', sources_CC_mean)
 
-    # pairs = -1 * np.ones((len(gtst), 2), dtype=int)
-    # # pairs = np.array([idx_truth.argsort(), idx_orica[idx_truth.argsort()]]).T
-    #
-    # for i, gt in enumerate(gtst):
-    #     if i in idx_truth:
-    #         idx_ = np.where(i==idx_truth)[0]
-    #         pairs[i] = [int(i), int(idx_orica[idx_])]
-
     pairs = np.array([np.arange(len(idx_truth)), np.arange(len(idx_truth))]).T
-
     corr_time = np.zeros((len(ori.mixing), len(correlation)))
 
     for i, mix in enumerate(ori.mixing):
@@ -247,8 +150,8 @@ if __name__ == '__main__':
 
 
     ## Non-stationatiry
-    ## SNR evaluation
 
+    # Detection and evaluation
     if detect:
         nsamples = int((2*fs.rescale('Hz')).magnitude)
         ## User defined thresholds and detection
@@ -273,9 +176,8 @@ if __name__ == '__main__':
             st.annotate(ica_source=k)
             sst.append(st)
 
-
         if 'ica_wf' not in sst[0].annotations.keys():
-            extract_wf(sst, sorted_y_on, recordings, times, fs)
+            extract_wf(sst, recordings, times, fs, ica=True, sources=sorted_y_on)
 
         gtst_red = [gt.time_slice(t_start=(pca_window+ica_window)*pq.s, t_stop=gtst[0].t_stop)
                     for gt in np.array(gtst)[np.sort(idx_truth)]]
@@ -300,6 +202,16 @@ if __name__ == '__main__':
         ax2.set_xlim([100, 102])
 
         fig.tight_layout()
+
+        ## SNR evaluation
+        unit_SNR(sst, sorted_y_on, times)
+        if plot_fig:
+            fig_snr, ax_snr = plt.subplots()
+            for (gt, st) in zip(gtst, sst):
+                ax_snr.plot(gt.annotations['snr'], st.annotations['ica_snr'], color='black',marker='x')
+            ax_snr.plot([0, 30], [0, 30], color='grey', ls='--')
+
+
 
     if ndim == 'all':
         ndim = recordings.shape[0]

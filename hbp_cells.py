@@ -485,7 +485,8 @@ def plot_extracellular_spike(cell, electrode, cell_name, figure_folder):
 
 def calc_extracellular(cell_model, model_type, save_sim_folder,
                        load_sim_folder, rotation, cell_model_id, elname, nobs, position=None, drifting=False,
-                       max_drift=100, min_drift=30, drift_steps=100, x_lim = [10., 80.]):
+                       max_drift=100, min_drift=30, drift_steps=100, x_lim=[10., 80.]):
+    # TODO add direction argument (electrode drift rather than cell drift)
     """
     Loads data from previous cell simulation, and use results to generate arbitrary number of spikes above a certain
     noise level.

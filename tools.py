@@ -10,7 +10,7 @@ import os
 from os.path import join
 import matplotlib.pylab as plt
 from sklearn.decomposition import PCA
-
+from neuroplot import *
 
 def load(filename):
     '''Generic loading of cPickled objects from file'''
@@ -238,7 +238,8 @@ def filter_analog_signals(anas, freq, fs, filter_type='bandpass', order=3, copy_
         raise ValueError('Filter is not stable')
 
 
-def select_cells(loc, spikes, bin_cat, n_exc, n_inh, min_dist=25, bound_x=None, min_amp=None):
+def select_cells(loc, spikes, bin_cat, n_exc, n_inh, min_dist=25, bound_x=[], min_amp=None, drift=False,
+                 drift_dir_ang=[], preferred_dir=None, ang_tol=30):
     pos_sel = []
     idxs_sel = []
     exc_idxs = np.where(bin_cat == 'EXCIT')[0]
@@ -246,6 +247,10 @@ def select_cells(loc, spikes, bin_cat, n_exc, n_inh, min_dist=25, bound_x=None, 
 
     if not min_amp:
         min_amp = 0
+
+    if drift:
+        if len(drift_dir_ang) == 0 or preferred_dir == None:
+            raise Exception('For drift selection provide drifting angles and preferred drift direction')
 
     for (idxs, num) in zip([exc_idxs, inh_idxs], [n_exc, n_inh]):
         n_sel = 0
@@ -262,19 +267,35 @@ def select_cells(loc, spikes, bin_cat, n_exc, n_inh, min_dist=25, bound_x=None, 
                 pass
             else:
                 amp = np.max(np.ptp(spikes[id_cell]))
-                if not bound_x:
-                    if amp > min_amp:
-                        # save cell
-                        pos_sel.append(loc[id_cell])
-                        idxs_sel.append(id_cell)
-                        n_sel += 1
+                if not drift:
+                    if len(bound_x) == 0:
+                        if amp > min_amp:
+                            # save cell
+                            pos_sel.append(loc[id_cell])
+                            idxs_sel.append(id_cell)
+                            n_sel += 1
+                    else:
+                        if loc[id_cell][0] > bound_x[0] and loc[id_cell][0] < bound_x[1] and amp > min_amp:
+                            # save cell
+                            pos_sel.append(loc[id_cell])
+                            idxs_sel.append(id_cell)
+                            n_sel += 1
                 else:
-                    if loc[id_cell][0] > bound_x[0] and loc[id_cell][0] < bound_x[1] and amp > min_amp:
-                        # save cell
-                        pos_sel.append(loc[id_cell])
-                        idxs_sel.append(id_cell)
-                        n_sel += 1
-
+                    # drift
+                    if len(bound_x) == 0:
+                        if amp > min_amp:
+                            # save cell
+                            if np.abs(drift_dir_ang[id_cell] - preferred_dir) < ang_tol:
+                                pos_sel.append(loc[id_cell])
+                                idxs_sel.append(id_cell)
+                                n_sel += 1
+                    else:
+                        if loc[id_cell][0] > bound_x[0] and loc[id_cell][0] < bound_x[1] and amp > min_amp:
+                            # save cell
+                            if np.abs(drift_dir_ang[id_cell] - preferred_dir) < ang_tol:
+                                pos_sel.append(loc[id_cell])
+                                idxs_sel.append(id_cell)
+                                n_sel += 1
     return idxs_sel
 
 
@@ -425,9 +446,13 @@ def detect_and_align(sources, fs, recordings, t_start=None, t_stop=None, n_std=5
                     first_spike = False
 
                 # upsample and find minimum
-                spike_up = ss.resample_poly(spike, upsample, 1)
-                # times_up = ss.resample_poly(t_spike, upsample, 1)*unit
-                t_spike_up = np.linspace(t_spike[0].magnitude, t_spike[-1].magnitude, num=len(spike_up)) * unit
+                if upsample > 1:
+                    spike_up = ss.resample_poly(spike, upsample, 1)
+                    # times_up = ss.resample_poly(t_spike, upsample, 1)*unit
+                    t_spike_up = np.linspace(t_spike[0].magnitude, t_spike[-1].magnitude, num=len(spike_up)) * unit
+                else:
+                    spike_up = spike
+                    t_spike_up = t_spike
 
                 min_idx_up = np.argmin(spike_up)
                 min_amp_up = np.min(spike_up)
@@ -481,7 +506,7 @@ def detect_and_align(sources, fs, recordings, t_start=None, t_stop=None, n_std=5
     return spike_trains
 
 
-def extract_wf(sst, sources, recordings, times, fs, upsample=8):
+def extract_wf(sst, recordings, times, fs, upsample=8, ica=False, sources=[]):
     '''
 
     Parameters
@@ -503,62 +528,89 @@ def extract_wf(sst, sources, recordings, times, fs, upsample=8):
     n_pad = int(2 * pq.ms * fs.rescale('kHz'))
     unit = times[0].rescale('ms').units
 
-    for (st, s) in zip(sst, sources):
-        sp_wf = []
-        sp_rec_wf = []
-        sp_amp = []
-        first_spike = True
+    nChs, nPts = recordings.shape
 
-        for t in st:
-            idx = np.where(times>t)[0][0]
-            # find single waveforms crossing thresholds
-            if idx - n_pad > 0 and idx + n_pad < len(s):
-                spike = s[idx - n_pad:idx + n_pad]
-                t_spike = times[idx - n_pad:idx + n_pad]
-                spike_rec = recordings[:, idx - n_pad:idx + n_pad]
-            elif idx - n_pad < 0:
-                spike = s[:idx + n_pad]
-                spike = np.pad(spike, (np.abs(idx - n_pad), 0), 'constant')
-                t_spike = times[:idx + n_pad]
-                t_spike = np.pad(t_spike, (np.abs(idx - n_pad), 0), 'constant') * unit
-                spike_rec = recordings[:, :idx + n_pad]
-                spike_rec = np.pad(spike_rec, ((0, 0), (np.abs(idx - n_pad), 0)), 'constant')
-            elif idx + n_pad > len(s):
-                spike = s[idx - n_pad:]
-                spike = np.pad(spike, (0, idx + n_pad - len(s)), 'constant')
-                t_spike = times[idx - n_pad:]
-                t_spike = np.pad(t_spike, (0, idx + n_pad - len(s)), 'constant') * unit
-                spike_rec = recordings[:, idx - n_pad:]
-                spike_rec = np.pad(spike_rec, ((0, 0), (0, idx + n_pad - len(s))), 'constant')
+    if ica:
+        if len(sources) == 0:
+            raise Exception('Provide IC sources for IC waveforms')
+        for (st, s) in zip(sst, sources):
+            sp_wf = []
+            sp_rec_wf = []
+            sp_amp = []
+            first_spike = True
 
-            if first_spike:
-                nsamples = len(spike)
-                nsamples_up = nsamples*upsample
-                first_spike = False
+            for t in st:
+                idx = np.where(times>t)[0][0]
+                # find single waveforms crossing thresholds
+                if idx - n_pad > 0 and idx + n_pad < nPts:
+                    spike = s[idx - n_pad:idx + n_pad]
+                    t_spike = times[idx - n_pad:idx + n_pad]
+                    spike_rec = recordings[:, idx - n_pad:idx + n_pad]
+                elif idx - n_pad < 0:
+                    spike = s[:idx + n_pad]
+                    spike = np.pad(spike, (np.abs(idx - n_pad), 0), 'constant')
+                    t_spike = times[:idx + n_pad]
+                    t_spike = np.pad(t_spike, (np.abs(idx - n_pad), 0), 'constant') * unit
+                    spike_rec = recordings[:, :idx + n_pad]
+                    spike_rec = np.pad(spike_rec, ((0, 0), (np.abs(idx - n_pad), 0)), 'constant')
+                elif idx + n_pad > nPts:
+                    spike = s[idx - n_pad:]
+                    spike = np.pad(spike, (0, idx + n_pad - nPts), 'constant')
+                    t_spike = times[idx - n_pad:]
+                    t_spike = np.pad(t_spike, (0, idx + n_pad - nPts), 'constant') * unit
+                    spike_rec = recordings[:, idx - n_pad:]
+                    spike_rec = np.pad(spike_rec, ((0, 0), (0, idx + n_pad - nPts)), 'constant')
 
-            # upsample and find minimume
-            spike_up = ss.resample_poly(spike, upsample, 1)
-            t_spike_up = np.linspace(t_spike[0].magnitude, t_spike[-1].magnitude, num=len(spike_up)) * unit
+                if first_spike:
+                    nsamples = len(spike)
+                    nsamples_up = nsamples*upsample
+                    first_spike = False
 
-            min_idx_up = np.argmin(spike_up)
-            min_amp_up = np.min(spike_up)
-            min_time_up = t_spike_up[min_idx_up]
+                min_ic_amp = np.min(spike)
+                sp_wf.append(spike)
+                sp_rec_wf.append(spike_rec)
+                sp_amp.append(min_ic_amp)
 
-            min_idx = np.argmin(spike)
-            min_amp = np.min(spike)
-            min_time = t_spike[min_idx]
+            st.waveforms = np.array(sp_rec_wf)
+            st.annotate(ica_amp=np.array(sp_amp))
+            st.annotate(ica_wf=np.array(sp_wf))
+    else:
+        for st in sst:
+            sp_rec_wf = []
+            sp_amp = []
+            first_spike = True
 
-            sp_wf.append(spike_up)
-            sp_rec_wf.append(spike_rec)
-            sp_amp.append(min_amp_up)
+            for t in st:
+                idx = np.where(times > t)[0][0]
+                # find single waveforms crossing thresholds
+                if idx - n_pad > 0 and idx + n_pad < nPts:
+                    t_spike = times[idx - n_pad:idx + n_pad]
+                    spike_rec = recordings[:, idx - n_pad:idx + n_pad]
+                elif idx - n_pad < 0:
+                    t_spike = times[:idx + n_pad]
+                    t_spike = np.pad(t_spike, (np.abs(idx - n_pad), 0), 'constant') * unit
+                    spike_rec = recordings[:, :idx + n_pad]
+                    spike_rec = np.pad(spike_rec, ((0, 0), (np.abs(idx - n_pad), 0)), 'constant')
+                elif idx + n_pad > nPts:
+                    t_spike = times[idx - n_pad:]
+                    t_spike = np.pad(t_spike, (0, idx + n_pad - nPts), 'constant') * unit
+                    spike_rec = recordings[:, idx - n_pad:]
+                    spike_rec = np.pad(spike_rec, ((0, 0), (0, idx + n_pad - nPts)), 'constant')
+                if first_spike:
+                    nsamples = len(spike_rec)
+                    nsamples_up = nsamples * upsample
+                    first_spike = False
 
-        st.waveforms = np.array(sp_rec_wf)
-        st.annotate(ica_amp=np.array(sp_amp))
-        st.annotate(ica_wf=np.array(sp_wf))
+                min_amp = np.min(spike_rec)
+                sp_rec_wf.append(spike_rec)
+                sp_amp.append(min_amp)
+
+            st.waveforms = np.array(sp_rec_wf)
 
 
 
-def reject_duplicate_spiketrains(sst, percent_threshold=0.5, min_spikes=3, sources=None):
+
+def reject_duplicate_spiketrains(sst, percent_threshold=0.5, min_spikes=3, sources=None, parallel=True, nprocesses=None):
     '''
 
     Parameters
@@ -572,25 +624,47 @@ def reject_duplicate_spiketrains(sst, percent_threshold=0.5, min_spikes=3, sourc
 
     '''
     import neo
+    import multiprocessing
+    import time
+
+    if nprocesses is None:
+        num_cores = len(sst)
+    else:
+        num_cores = nprocesses
+
     spike_trains = []
     idx_sources = []
     duplicates = []
-    for i, sp_times in enumerate(sst):
-        # check if overlapping with another source
-        t_jitt = 1 * pq.ms
-        counts = []
-        for j, sp in enumerate(sst):
-            count = 0
-            if i != j:
-                for t_i in sp_times:
-                    id_over = np.where((sp > t_i - t_jitt) & (sp < t_i + t_jitt))[0]
-                    if len(id_over) != 0:
-                        count += 1
-                if count >= percent_threshold * len(sp_times):
-                    if [i, j] not in duplicates and [j, i] not in duplicates:
-                        print 'Found duplicate spike trains: ', i, j, count
-                        duplicates.append([i, j])
-                counts.append(count)
+
+    if parallel:
+        # t_start = time.time()
+        pool = multiprocessing.Pool(nprocesses)
+        results = [pool.apply_async(find_duplicates, (i, sp_times, sst,))
+                   for i, sp_times in enumerate(sst)]
+        duplicates = []
+        for result in results:
+            duplicates.extend(result.get())
+
+        # print 'Parallel: ', time.time() - t_start
+    else:
+        # t_start = time.time()
+        for i, sp_times in enumerate(sst):
+            # check if overlapping with another source
+            t_jitt = 1 * pq.ms
+            counts = []
+            for j, sp in enumerate(sst):
+                count = 0
+                if i != j:
+                    for t_i in sp_times:
+                        id_over = np.where((sp > t_i - t_jitt) & (sp < t_i + t_jitt))[0]
+                        if len(id_over) != 0:
+                            count += 1
+                    if count >= percent_threshold * len(sp_times):
+                        if [i, j] not in duplicates and [j, i] not in duplicates:
+                            print 'Found duplicate spike trains: ', i, j, count
+                            duplicates.append([i, j])
+                    counts.append(count)
+        # print 'Sequential: ', time.time() - t_start
 
     duplicates = np.array(duplicates)
     discard = []
@@ -628,6 +702,25 @@ def reject_duplicate_spiketrains(sst, percent_threshold=0.5, min_spikes=3, sourc
         idx_sources = range(len(sst))
 
     return spike_trains, idx_sources, duplicates
+
+
+def find_duplicates(i, sp_times, sst, percent_threshold=0.5, t_jitt=1*pq.ms):
+    counts = []
+    duplicates = []
+    for j, sp in enumerate(sst):
+        count = 0
+        if i != j:
+            for t_i in sp_times:
+                id_over = np.where((sp > t_i - t_jitt) & (sp < t_i + t_jitt))[0]
+                if len(id_over) != 0:
+                    count += 1
+            if count >= percent_threshold * len(sp_times):
+                if [i, j] not in duplicates and [j, i] not in duplicates:
+                    print 'Found duplicate spike trains: ', i, j, count
+                    duplicates.append([i, j])
+            counts.append(count)
+
+    return duplicates
 
 
 def integrate_sources(sources):
@@ -1209,7 +1302,7 @@ def cluster_spike_amplitudes(sst, metric='cal', min_sihlo=0.8, min_cal=100, max_
 
     return reduced_sst, reduced_amps, nclusters, keep_id, score
 
-def cc_max_spiketrains(st, st_id, other_st):
+def cc_max_spiketrains(st, st_id, other_st, max_lag=20*pq.ms):
     '''
 
     Parameters
@@ -1226,10 +1319,13 @@ def cc_max_spiketrains(st, st_id, other_st):
 
     cc_vec = np.zeros(len(other_st))
     for p, p_st in enumerate(other_st):
-        cc, bin_ids = cch(st, p_st, kernel=np.hamming(100))
-        central_bin = len(cc) // 2
+        # cc, bin_ids = cch(st, p_st, kernel=np.hamming(100))
+        cc, bin_ids = cch(st, p_st, kernel=np.hamming(10), window=[-max_lag, max_lag])
+        # central_bin = len(cc) // 2
         # normalize by number of spikes
-        cc_vec[p] = np.max(cc[central_bin-10:central_bin+10]) #/ (len(st) + len(p_st))
+        # cc_vec[p] = np.max(cc[central_bin-10:central_bin+10]) #/ (len(st) + len(p_st))
+        cc_vec[p] = np.max(cc) #/ (len(st) + len(p_st))
+
     return st_id, cc_vec
 
 def evaluate_spiketrains(gtst, sst, t_jitt = 1*pq.ms, overlapping=False, parallel=True, nprocesses=None,
@@ -1291,12 +1387,13 @@ def evaluate_spiketrains(gtst, sst, t_jitt = 1*pq.ms, overlapping=False, paralle
                 cc_matr[id] = [c / (len(gtst_clip[id]) + len(sst_clip[i])) for i, c in enumerate(cc_vec)]
             pool.close()
         else:
+            max_lag = 20*pq.ms
             for o, o_st in enumerate(original_st):
                 for p, p_st in enumerate(predicted_st):
-                    cc, bin_ids = cch(o_st, p_st, kernel=np.hamming(100))
-                    central_bin = len(cc) // 2
+                    # cc, bin_ids = cch(o_st, p_st, kernel=np.hamming(100))
+                    cc, bin_ids = cch(o_st, p_st, kernel=np.hamming(10), window=[-max_lag, max_lag])
                     # normalize by number of spikes
-                    cc_matr[o, p] = np.max(cc[central_bin-10:central_bin+10]) / (len(gtst_clip[o]) + len(sst_clip[p])) # (abs(len(gtst[o]) - len(sst[p])) + 1)
+                    cc_matr[o, p] = np.max(cc) / (len(gtst_clip[o]) + len(sst_clip[p])) # (abs(len(gtst[o]) - len(sst[p])) + 1)
         cc_matr /= np.max(cc_matr)
 
         print 'Pairing spike trains'
@@ -1306,34 +1403,32 @@ def evaluate_spiketrains(gtst, sst, t_jitt = 1*pq.ms, overlapping=False, paralle
         put_pairs = -1 * np.ones((len(gtst), 2)).astype('int')
 
         for i in range(len(gtst)):
-            if i in row_ind:
-                idx = np.where(i == col_ind)
+            # if i in row_ind:
+            idx = np.where(i == col_ind)
+            if len(idx[0]) != 0:
                 if cc2[col_ind[idx], row_ind[idx]] > 0.1:
                     put_pairs[i] = [int(col_ind[idx]), int(row_ind[idx])]
-        print put_pairs
-
         t_hung_end = time.time()
 
-        # shift best match by max lag
-        for gt_i, gt in enumerate(gtst_clip):
-            pair = put_pairs[gt_i]
-            if pair[0] != -1:
-                o_st = original_st[gt_i]
-                p_st = predicted_st[pair[1]]
-
-                cc, bin_ids = cch(o_st, p_st, kernel=np.hamming(50))
-                central_bin = len(cc) // 2
-                # normalize by number of spikes
-                max_lag = np.argmax(cc[central_bin - 5:central_bin + 5])
-                optimal_shift = (-5 + max_lag) * pq.ms
-                sst_clip[pair[1]] -= optimal_shift
-                idx_after = np.where(sst_clip[pair[1]] > sst_clip[pair[1]].t_stop)[0]
-                idx_before = np.where(sst_clip[pair[1]] < sst_clip[pair[1]].t_start)[0]
-                if len(idx_after) > 0:
-                    sst_clip[pair[1]][idx_after] = sst_clip[pair[1]].t_stop
-                if len(idx_before) > 0:
-                    sst_clip[pair[1]][idx_before] = sst_clip[pair[1]].t_start
-
+        # # shift best match by max lag
+        # for gt_i, gt in enumerate(gtst_clip):
+        #     pair = put_pairs[gt_i]
+        #     if pair[0] != -1:
+        #         o_st = original_st[gt_i]
+        #         p_st = predicted_st[pair[1]]
+        #
+        #         cc, bin_ids = cch(o_st, p_st, kernel=np.hamming(50))
+        #         central_bin = len(cc) // 2
+        #         # normalize by number of spikes
+        #         max_lag = np.argmax(cc[central_bin - 5:central_bin + 5])
+        #         optimal_shift = (-5 + max_lag) * pq.ms
+        #         sst_clip[pair[1]] -= optimal_shift
+        #         idx_after = np.where(sst_clip[pair[1]] > sst_clip[pair[1]].t_stop)[0]
+        #         idx_before = np.where(sst_clip[pair[1]] < sst_clip[pair[1]].t_start)[0]
+        #         if len(idx_after) > 0:
+        #             sst_clip[pair[1]][idx_after] = sst_clip[pair[1]].t_stop
+        #         if len(idx_before) > 0:
+        #             sst_clip[pair[1]][idx_before] = sst_clip[pair[1]].t_start
     else:
         put_pairs = pairs
 
@@ -1387,39 +1482,35 @@ def evaluate_spiketrains(gtst, sst, t_jitt = 1*pq.ms, overlapping=False, paralle
             lab_gt = np.array(['FN'] * len(gt))
         gt.annotate(labels=lab_gt)
 
-    # # if unpaired SST
-    # for st in sst:
-    #     if 'labels' not in st.annotations:
-    #         lab_st = np.array(['UNPAIRED'] * len(st))
-    #         st.annotate(labels=lab_st)
 
     # find CL-CLO-CLSO
     print 'Finding CL'
     for gt_i, gt in enumerate(gtst_clip):
         lab_gt = gt.annotations['labels']
-        for lab_i, lab in enumerate(lab_gt):
+        for l_gt, lab in enumerate(lab_gt):
             if lab == 'UNPAIRED':
                 for st_i, st in enumerate(sst_clip):
                     if st.annotations['paired']:
-                        t_up = gt[lab_i]
+                        t_up = gt[l_gt]
                         id_sp = np.where((st > t_up - t_jitt) & (st < t_up + t_jitt))[0]
                         lab_st = st.annotations['labels']
                         if len(id_sp) == 1 and lab_st[id_sp] == 'UNPAIRED':
                             if 'overlap' in gt.annotations.keys():
-                                if gt.annotations['overlap'][lab_i] == 'NO':
-                                    lab_gt[lab_i] = 'CL'
+                                if gt.annotations['overlap'][l_gt] == 'NO':
+                                    lab_gt[l_gt] = 'CL_' + str(gt_i) + '_' + str(st_i)
                                     if lab_st[id_sp] == 'UNPAIRED':
                                         lab_st[id_sp] = 'CL_NP'
-                                elif gt.annotations['overlap'][lab_i] == 'O':
-                                    lab_gt[lab_i] = 'CLO'
+                                elif gt.annotations['overlap'][l_gt] == 'O':
+                                    lab_gt[l_gt] = 'CLO_' + str(gt_i) + '_' + str(st_i)
                                     if lab_st[id_sp] == 'UNPAIRED':
                                         lab_st[id_sp] = 'CLO_NP'
-                                elif gt.annotations['overlap'][lab_i] == 'SO':
-                                    lab_gt[lab_i] = 'CLSO'
+                                elif gt.annotations['overlap'][l_gt] == 'SO':
+                                    lab_gt[l_gt] = 'CLSO_' + str(gt_i) + '_' + str(st_i)
                                     if lab_st[id_sp] == 'UNPAIRED':
                                         lab_st[id_sp] = 'CLSO_NP'
                             else:
-                                lab_gt[lab_i] = 'CL'
+                                lab_gt[l_gt] = 'CL_' + str(gt_i) + '_' + str(st_i)
+                                # print 'here'
                                 if lab_st[id_sp] == 'UNPAIRED':
                                     lab_st[id_sp] = 'CL_NP'
                         st.annotate(labels=lab_st)
@@ -1428,24 +1519,24 @@ def evaluate_spiketrains(gtst, sst, t_jitt = 1*pq.ms, overlapping=False, paralle
     print 'Finding FP and FN'
     for gt_i, gt in enumerate(gtst_clip):
         lab_gt = gt.annotations['labels']
-        for lab_i, lab in enumerate(lab_gt):
+        for l_gt, lab in enumerate(lab_gt):
             if lab == 'UNPAIRED':
                 if 'overlap' in gt.annotations.keys():
-                    if gt.annotations['overlap'][lab_i] == 'NO':
-                        lab_gt[lab_i] = 'FN'
-                    elif gt.annotations['overlap'][lab_i] == 'O':
-                        lab_gt[lab_i] = 'FNO'
-                    elif gt.annotations['overlap'][lab_i] == 'SO':
-                        lab_gt[lab_i] = 'FNSO'
+                    if gt.annotations['overlap'][l_gt] == 'NO':
+                        lab_gt[l_gt] = 'FN'
+                    elif gt.annotations['overlap'][l_gt] == 'O':
+                        lab_gt[l_gt] = 'FNO'
+                    elif gt.annotations['overlap'][l_gt] == 'SO':
+                        lab_gt[l_gt] = 'FNSO'
                 else:
-                    lab_gt[lab_i] = 'FN'
+                    lab_gt[l_gt] = 'FN'
         gt.annotate(labels=lab_gt)
 
     for st_i, st in enumerate(sst_clip):
         lab_st = st.annotations['labels']
-        for lab_i, lab in enumerate(lab_st):
+        for st_i, lab in enumerate(lab_st):
             if lab == 'UNPAIRED':
-                    lab_st[lab_i] = 'FP'
+                    lab_st[st_i] = 'FP'
         st.annotate(labels=lab_st)
 
     TOT_GT = sum([len(gt) for gt in gtst_clip])
@@ -1458,11 +1549,11 @@ def evaluate_spiketrains(gtst, sst, t_jitt = 1*pq.ms, overlapping=False, paralle
 
     print 'TP :', TP, TPO, TPSO, TP+TPO+TPSO
 
-    CL = sum([len(np.where('CL' == gt.annotations['labels'])[0]) for gt in gtst_clip])\
+    CL = sum([len([i for i, v in enumerate(gt.annotations['labels']) if 'CL' in v]) for gt in gtst_clip])
          # + sum([len(np.where('CL' == st.annotations['labels'])[0]) for st in sst])
-    CLO = sum([len(np.where('CLO' == gt.annotations['labels'])[0]) for gt in gtst_clip]) \
+    CLO = sum([len([i for i, v in enumerate(gt.annotations['labels']) if 'CLO' in v]) for gt in gtst_clip])
           # + sum([len(np.where('CLO' == st.annotations['labels'])[0]) for st in sst])
-    CLSO = sum([len(np.where('CLSO' == gt.annotations['labels'])[0]) for gt in gtst_clip]) \
+    CLSO = sum([len([i for i, v in enumerate(gt.annotations['labels']) if 'CLSO' in v]) for gt in gtst_clip])
            # + sum([len(np.where('CLSO' == st.annotations['labels'])[0]) for st in sst_clip])
 
     print 'CL :', CL, CLO, CLSO, CL+CLO+CLSO
@@ -1487,6 +1578,86 @@ def evaluate_spiketrains(gtst, sst, t_jitt = 1*pq.ms, overlapping=False, paralle
 
 
     return counts, put_pairs #, cc_matr
+
+def confusion_matrix(gtst, sst, pairs, plot_fig=True, xlabel=None, ylabel=None):
+    '''
+
+    Parameters
+    ----------
+    gtst
+    sst
+    pairs 1D array with paired sst to gtst
+
+    Returns
+    -------
+
+    '''
+    conf_matrix = np.zeros((len(gtst)+1, len(sst)+1), dtype=int)
+    idxs_pairs_clean = np.where(pairs != -1)
+    idxs_pairs_dirty = np.where(pairs == -1)
+    pairs_clean = pairs[idxs_pairs_clean]
+    gtst_clean = np.array(gtst)[idxs_pairs_clean]
+    gtst_extra = np.array(gtst)[idxs_pairs_dirty]
+
+    gtst_idxs = np.append(idxs_pairs_clean, idxs_pairs_dirty)
+    sst_idxs = pairs_clean
+
+    for gt_i, gt in enumerate(gtst_clean):
+        if gt.annotations['paired']:
+            tp = len(np.where('TP' == gt.annotations['labels'])[0])
+            conf_matrix[gt_i, gt_i] =  int(tp)
+            for st_i, st in enumerate(sst):
+                cl_str = str(gt_i) + '_' + str(st_i)
+                cl = len([i for i, v in enumerate(gt.annotations['labels']) if 'CL' in v and cl_str in v])
+                if cl != 0:
+                    st_p = np.where(st_i == pairs_clean)
+                    conf_matrix[gt_i, st_p] = int(cl)
+        fn = len(np.where('FN' == gt.annotations['labels'])[0])
+        conf_matrix[gt_i, -1] = int(fn)
+    for gt_i, gt in enumerate(gtst_extra):
+        fn = len(np.where('FN' == gt.annotations['labels'])[0])
+        conf_matrix[gt_i+len(gtst_clean), -1] = int(fn)
+    for st_i, st in enumerate(sst):
+        fp = len(np.where('FP' == st.annotations['labels'])[0])
+        st_p = np.where(st_i == pairs_clean)
+        conf_matrix[-1, st_p] = fp
+
+    if plot_fig:
+        fig, ax = plt.subplots()
+        # Using matshow here just because it sets the ticks up nicely. imshow is faster.
+        ax.matshow(conf_matrix, cmap='Greens')
+
+        for (i, j), z in np.ndenumerate(conf_matrix):
+            if z != 0:
+                if z > np.max(conf_matrix)/2.:
+                    ax.text(j, i, '{:d}'.format(z), ha='center', va='center', color='white')
+                else:
+                    ax.text(j, i, '{:d}'.format(z), ha='center', va='center', color='black')
+                    # ,   bbox=dict(boxstyle='round', facecolor='white', edgecolor='0.3'))
+
+        ax.axhline(int(len(gtst)-1)+0.5, color='black')
+        ax.axvline(int(len(sst)-1)+0.5, color='black')
+
+        # Major ticks
+        ax.set_xticks(np.arange(0, len(sst) + 1))
+        ax.set_yticks(np.arange(0, len(gtst) + 1))
+        ax.xaxis.tick_bottom()
+        # Labels for major ticks
+        ax.set_xticklabels(np.append(sst_idxs, 'FN'), fontsize=12)
+        ax.set_yticklabels(np.append(gtst_idxs, 'FP'), fontsize=12)
+
+        if xlabel==None:
+            ax.set_xlabel('Sorted spike trains', fontsize=15)
+        else:
+            ax.set_xlabel(xlabel, fontsize=20)
+        if ylabel==None:
+            ax.set_ylabel('Ground truth spike trains', fontsize=15)
+        else:
+            ax.set_ylabel(ylabel, fontsize=20)
+
+    return conf_matrix, ax
+
+
 
 def matcorr(x, y, rmmean=False, weighting=None):
     from scipy.optimize import linear_sum_assignment
@@ -1634,7 +1805,7 @@ def annotate_overlapping(gtst, t_jitt = 1*pq.ms, overlapping_pairs=None, verbose
         st_i.annotate(overlap=over)
 
 def raster_plots(st, bintype=False, ax=None, overlap=False, labels=False, color_st=None, fs=10,
-                 marker='.', mew=2, markersize=5):
+                 marker='|', mew=2, markersize=5):
     '''
 
     Parameters
@@ -1974,8 +2145,329 @@ def calc_MI(x, y, bins):
     return mi
 
 
+##### Methods from spike_sorting.py ###
+
+def compute_performance(counts):
+
+    tp_rate = float(counts['TP']) / counts['TOT_GT'] * 100
+    tpo_rate = float(counts['TPO']) / counts['TOT_GT'] * 100
+    tpso_rate = float(counts['TPSO']) / counts['TOT_GT'] * 100
+    tot_tp_rate = float(counts['TP'] + counts['TPO'] + counts['TPSO']) / counts['TOT_GT'] * 100
+
+    cl_rate = float(counts['CL']) / counts['TOT_GT'] * 100
+    clo_rate = float(counts['CLO']) / counts['TOT_GT'] * 100
+    clso_rate = float(counts['CLSO']) / counts['TOT_GT'] * 100
+    tot_cl_rate = float(counts['CL'] + counts['CLO'] + counts['CLSO']) / counts['TOT_GT'] * 100
+
+    fn_rate = float(counts['FN']) / counts['TOT_GT'] * 100
+    fno_rate = float(counts['FNO']) / counts['TOT_GT'] * 100
+    fnso_rate = float(counts['FNSO']) / counts['TOT_GT'] * 100
+    tot_fn_rate = float(counts['FN'] + counts['FNO'] + counts['FNSO']) / counts['TOT_GT'] * 100
+
+    fp_gt = float(counts['FP']) / counts['TOT_GT'] * 100
+    fp_st = float(counts['FP']) / counts['TOT_ST'] * 100
+
+    accuracy = tot_tp_rate / (tot_tp_rate + tot_fn_rate + fp_gt) * 100
+    sensitivity = tot_tp_rate / (tot_tp_rate + tot_fn_rate) * 100
+    miss_rate = tot_fn_rate / (tot_tp_rate + tot_fn_rate) * 100
+    precision = tot_tp_rate / (tot_tp_rate + fp_gt) * 100
+    false_discovery_rate = fp_gt / (tot_tp_rate + fp_gt) * 100
+
+    print 'PERFORMANCE: \n'
+    print '\nTP: ', tp_rate, ' %'
+    print 'TPO: ', tpo_rate, ' %'
+    print 'TPSO: ', tpso_rate, ' %'
+    print 'TOT TP: ', tot_tp_rate, ' %'
+
+    print '\nCL: ', cl_rate, ' %'
+    print 'CLO: ', clo_rate, ' %'
+    print 'CLSO: ', clso_rate, ' %'
+    print 'TOT CL: ', tot_cl_rate, ' %'
+
+    print '\nFN: ', fn_rate, ' %'
+    print 'FNO: ', fno_rate, ' %'
+    print 'FNSO: ', fnso_rate, ' %'
+    print 'TOT FN: ', tot_fn_rate, ' %'
+
+    print '\nFP (%GT): ', fp_gt, ' %'
+    print '\nFP (%ST): ', fp_st, ' %'
+
+    print '\nACCURACY: ', accuracy, ' %'
+    print 'SENSITIVITY: ', sensitivity, ' %'
+    print 'MISS RATE: ', miss_rate, ' %'
+    print 'PRECISION: ', precision, ' %'
+    print 'FALSE DISCOVERY RATE: ', false_discovery_rate, ' %'
+
+    performance = {'tot_tp': tot_tp_rate, 'tot_cl': tot_cl_rate, 'tot_fn': tot_fn_rate, 'tot_fp': fp_gt,
+                   'accuracy': accuracy, 'sensitivity': sensitivity, 'precision': precision, 'miss_rate': miss_rate,
+                   'false_disc_rate': false_discovery_rate}
+
+    return performance
 
 
+def unit_SNR(sst, sources, times):
+    '''
+
+    Parameters
+    ----------
+    sst
+    sources
+
+    Returns
+    -------
+
+    '''
+    between_spiks = 5*pq.ms
+    noise_source = []
+
+    for (st, s) in zip(sst, sources):
+        t_idx = []
+        for (t_pre, t_post) in zip(st[:-1], st[1:]):
+            t_idx = np.append(t_idx, np.where((times > t_pre + between_spiks) & (times < t_post - between_spiks)))
+        noise_source.append(s[t_idx.astype(int)])
+        sd = np.std(noise_source[-1])
+        mean_ic_amp = np.abs(np.mean(st.annotations['ica_amp']))
+        print t_idx[0]/32000., mean_ic_amp, sd
+        st.annotate(ica_snr=mean_ic_amp/sd)
+
+    return np.array(noise_source)
+
+
+
+def find_consistent_sorces(source_idx, thresh=0.5):
+    '''
+    Returns sources that appear at least thresh % of the times
+    Parameters
+    ----------
+    source_idx
+    thresh
+
+    Returns
+    -------
+
+    '''
+    len_no_empty = len([s for s in source_idx if len(s)>0])
+
+    s_dict = {}
+    for s in source_idx:
+        for id in s:
+            if id not in s_dict.keys():
+                s_dict.update({id: 1})
+            else:
+                s_dict[id] += 1
+
+    consistent_sources = []
+    for id in s_dict.keys():
+        if s_dict[id] >= thresh*len_no_empty:
+            consistent_sources.append(id)
+
+    return np.sort(consistent_sources)
+
+
+def plot_mixing(mixing, mea_pos, mea_dim, mea_name=None, gs=None, fig=None):
+    '''
+
+    Parameters
+    ----------
+    mixing
+    mea_pos
+    mea_dim
+    mea_pitch
+
+    Returns
+    -------
+
+    '''
+    from neuroplot import plot_weight
+
+    n_sources = len(mixing)
+    cols = int(np.ceil(np.sqrt(n_sources)))
+    rows = int(np.ceil(n_sources / float(cols)))
+
+    if fig is None and gs is None:
+        fig = plt.figure()
+
+    if gs is not None:
+        from matplotlib import gridspec
+        gs_plot = gridspec.GridSpecFromSubplotSpec(rows, cols, subplot_spec=gs)
+
+    for n in range(n_sources):
+        if gs is not None:
+            ax_w = fig.add_subplot(gs_plot[n])
+        else:
+            ax_w = fig.add_subplot(rows, cols, n+1)
+        mix = mixing[n]/np.ptp(mixing[n])
+        if mea_name == 'Neuronexus-32-Kampff':
+            mix = np.insert(mix, [0, 10, -10, 32], np.nan)
+            plot_weight(mix, [3, 12], ax=ax_w)
+        else:
+            plot_weight(mix, mea_dim, ax=ax_w)
+
+    return fig
+
+
+def play_mixing(mixing, mea_pos, mea_dim):
+    '''
+
+    Parameters
+    ----------
+    mixing
+    mea_pos
+    mea_dim
+    mea_pitch
+
+    Returns
+    -------
+
+    '''
+    from neuroplot import plot_weight
+
+    n_sources = len(mixing)
+    cols = int(np.ceil(np.sqrt(n_sources)))
+    rows = int(np.ceil(n_sources / float(cols)))
+    fig_t = plt.figure()
+
+    anim = []
+
+    for n in range(n_sources):
+        ax_w = fig_t.add_subplot(rows, cols, n+1)
+        mix = mixing[n]/np.ptp(mixing[n])
+        im = play_spike(mix, mea_dim, ax=ax_w, fig=fig_t)
+        anim.append(im)
+
+    return fig_t
+
+
+def plot_templates(templates, mea_pos, mea_pitch, single_figure=True):
+    '''
+
+    Parameters
+    ----------
+    templates
+    mea_pos
+    mea_pitch
+
+    Returns
+    -------
+
+    '''
+    from neuroplot import plot_weight
+
+    n_sources = len(templates)
+    fig_t = plt.figure()
+
+    if single_figure:
+        colors = plt.rcParams['axes.color_cycle']
+        ax_t = fig_t.add_subplot(111)
+
+        for n, t in enumerate(templates):
+            print 'Plotting spike ', n, ' out of ', n_sources
+            if len(t.shape) == 3:
+                # plot_mea_recording(w[:5], mea_pos, mea_pitch, colors=colors[np.mod(n, len(colors))], ax=ax_w, lw=0.1)
+                plot_mea_recording(t.mean(axis=0), mea_pos, mea_pitch, colors=colors[np.mod(n, len(colors))], ax=ax_t, lw=2)
+            else:
+                plot_mea_recording(t, mea_pos, mea_pitch, colors=colors[np.mod(n, len(colors))], ax=ax_t, lw=2)
+
+    else:
+        cols = int(np.ceil(np.sqrt(n_sources)))
+        rows = int(np.ceil(n_sources / float(cols)))
+
+        for n in range(n_sources):
+            ax_t = fig_t.add_subplot(rows, cols, n+1)
+            plot_mea_recording(templates[n], mea_pos, mea_pitch, ax=ax_t)
+
+    return fig_t
+
+
+
+def templates_weights(templates, weights, mea_pos, mea_dim, mea_pitch, pairs=None):
+    '''
+
+    Parameters
+    ----------
+    templates
+    weights
+    pairs
+    mea_pos
+    mea_dim
+    mea_pitch
+
+    Returns
+    -------
+
+    '''
+    from matplotlib import gridspec
+    n_neurons = len(templates)
+    gs0 = gridspec.GridSpec(1, 2)
+
+    cols = int(np.ceil(np.sqrt(n_neurons)))
+    rows = int(np.ceil(n_neurons / float(cols)))
+
+    gs_t = gridspec.GridSpecFromSubplotSpec(rows, cols, subplot_spec=gs0[0])
+    gs_w = gridspec.GridSpecFromSubplotSpec(rows, cols, subplot_spec=gs0[1])
+    fig_t = plt.figure()
+
+    min_v = np.min(templates)
+
+    for n in range(n_neurons):
+        ax_t = fig_t.add_subplot(gs_t[n])
+        ax_w = fig_t.add_subplot(gs_w[n])
+
+        plot_mea_recording(templates[n], mea_pos, mea_pitch, ax=ax_t)
+        if pairs is not None:
+            if pairs[n, 0] != -1:
+                plot_weight(weights[pairs[n, 1]], mea_dim, ax=ax_w)
+            else:
+                ax_w.axis('off')
+        else:
+            plot_weight(weights[n], mea_dim, ax=ax_w)
+
+    return fig_t
+
+def plot_ic_waveforms(spiketrains):
+    ica_sources = [s.annotations['ica_source'] for s in spiketrains]
+    sources = np.unique(ica_sources)
+    n_sources = len(sources)
+    cols = int(np.ceil(np.sqrt(n_sources)))
+    rows = int(np.ceil(n_sources / float(cols)))
+    fig_t = plt.figure()
+    colors = plt.rcParams['axes.color_cycle']
+
+    for n, s in enumerate(sources):
+        ax_t = fig_t.add_subplot(rows, cols, n + 1)
+
+        count = 0
+        for st, ic in enumerate(ica_sources):
+            if ic == s:
+                ax_t.plot(spiketrains[st].annotations['ica_wf'].T, color=colors[count], lw=0.2)
+                ax_t.plot(np.mean(spiketrains[st].annotations['ica_wf'], axis=0), color=colors[count], lw=1)
+                count += 1
+
+    return fig_t
+
+def plot_waveforms(spiketrains, mea_pos, mea_pitch):
+    wf = [s.waveforms for s in spiketrains]
+    fig_w = plt.figure()
+    ax_w = fig_w.add_subplot(111)
+    colors = plt.rcParams['axes.color_cycle']
+
+    for n, w in enumerate(wf):
+        print 'Plotting spike ', n, ' out of ', len(wf)
+        # plot_mea_recording(w[:5], mea_pos, mea_pitch, colors=colors[np.mod(n, len(colors))], ax=ax_w, lw=0.1)
+        plot_mea_recording(w.mean(axis=0), mea_pos, mea_pitch, colors=colors[np.mod(n, len(colors))], ax=ax_w, lw=2)
+
+    return fig_w
+
+def plot_matched_raster(gtst, sst, pairs):
+    fig = plt.figure()
+    ax1 = fig.add_subplot(211)
+    ax2 = fig.add_subplot(212)
+
+    raster_plots(gtst, color_st=pairs[:, 0], ax=ax1)
+    raster_plots(sst, color_st=pairs[:, 1], ax=ax2)
+
+    fig.tight_layout()
+    return ax1, ax2
 
 
 
