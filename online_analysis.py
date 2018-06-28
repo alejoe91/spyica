@@ -60,6 +60,10 @@ if __name__ == '__main__':
         info = yaml.load(f)
     electrode_name = info['General']['electrode name']
     fs = info['General']['fs']
+    if isinstance(fs, str):
+        fs = pq.Quantity(float(fs.split()[0]), fs.split()[1])
+    elif isinstance(fs, pq.Quantity):
+        fs = fs
     nsec_window = 10
     nsamples_window = int(fs.rescale('Hz').magnitude * nsec_window)
     mea_pos, mea_dim, mea_pitch = MEA.return_mea(electrode_name)
@@ -73,21 +77,23 @@ if __name__ == '__main__':
     n_sources = sources.shape[0]
     # lambda_val = 0.01
     lambda_val = 0.995
-    ff = 'cooling'
+    # ff = 'cooling'
+    ff = 'adaptive'
+    ffdecayrate=0.5
 
     online = False
-    detect = True
-    calibPCA = True
+    detect = False
+    calibPCA = False
 
     pca_window = 10
-    ica_window = 10
+    ica_window = 0
     skew_window = 5
-    step = 2
+    step = 1
 
     start_time = time.time()
     ori = orica.onlineORICAss(recordings, fs=fs, onlineWhitening=online, calibratePCA=calibPCA, forgetfac=ff,
                               skew_thresh=0.5, ndim=ndim, lambda_0=lambda_val, verbose=True,
-                              numpass=1, block=block, step_size=step,
+                              numpass=1, block=block, step_size=step, ffdecayrate=ffdecayrate,
                               skew_window=skew_window, pca_window=pca_window, ica_window=ica_window,
                               detect_trheshold=10, onlineDetection=False)
 

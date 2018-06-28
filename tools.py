@@ -63,11 +63,6 @@ def whiten_data(X, n_comp=None):
 
     n_feat, n_samples = X.shape
 
-    # centered_matrix = X - X.mean(axis=1)[:, np.newaxis]
-    # cov = np.dot(centered_matrix, centered_matrix.T)/n_samples
-    # eigvals, eigvecs = np.linalg.eig(cov)
-    # sphere = np.matmul(np.diag(1. / np.sqrt(eigvals)), eigvecs).T
-
     pca = PCA(n_components=n_comp, whiten=True)
     data = pca.fit_transform(X.T)
     eigvecs = pca.components_
@@ -95,6 +90,9 @@ def whiten_data(X, n_comp=None):
 #     data = pca.fit_transform(X.T)
 #
 #     return np.transpose(data), pca.components_, pca.explained_variance_ratio_
+
+
+############ RECSTIMSIM ######################
 
 
 def load_EAP_data(spike_folder, cell_names=None, all_categories=None, samples_per_cat=None):
@@ -195,6 +193,141 @@ def get_binary_cat(categories, excit, inhib):
     return np.array(binary_cat, dtype=str)
 
 
+def get_EAP_features(EAP, feat_list, dt=None, EAP_times=None, threshold_detect=5., normalize=False):
+    ''' extract features specified in feat_list from EAP
+    '''
+    reference_mode = 't0'
+    if EAP_times is not None and dt is not None:
+        test_dt = (EAP_times[-1] - EAP_times[0]) / (len(EAP_times) - 1)
+        if dt != test_dt:
+            raise ValueError('EAP_times and dt do not match.')
+    elif EAP_times is not None:
+        dt = (EAP_times[-1] - EAP_times[0]) / (len(EAP_times) - 1)
+    elif dt is not None:
+        EAP_times = np.arange(EAP.shape[-1]) * dt
+    else:
+        raise NotImplementedError('Please, specify either dt or EAP_times.')
+
+    if len(EAP.shape) == 1:
+        EAP = np.reshape(EAP, [1, 1, -1])
+    elif len(EAP.shape) == 2:
+        EAP = np.reshape(EAP, [1, EAP.shape[0], EAP.shape[1]])
+    if len(EAP.shape) != 3:
+        raise ValueError('Cannot handle EAPs with shape', EAP.shape)
+
+    if normalize:
+        signs = np.sign(np.min(EAP.reshape([EAP.shape[0], -1]), axis=1))
+        norm = np.abs(np.min(EAP.reshape([EAP.shape[0], -1]), axis=1))
+        EAP = np.array([EAP[i] / n if signs[i] > 0 else EAP[i] / n - 2. for i, n in enumerate(norm)])
+
+    features = {}
+
+    amps = np.zeros((EAP.shape[0], EAP.shape[1]))
+    na_peak = np.zeros((EAP.shape[0], EAP.shape[1]))
+    rep_peak = np.zeros((EAP.shape[0], EAP.shape[1]))
+    if 'W' in feat_list:
+        features['widths'] = np.zeros((EAP.shape[0], EAP.shape[1]))
+    if 'F' in feat_list:
+        features['fwhm'] = np.zeros((EAP.shape[0], EAP.shape[1]))
+    if 'R' in feat_list:
+        features['ratio'] = np.zeros((EAP.shape[0], EAP.shape[1]))
+    if 'S' in feat_list:
+        features['speed'] = np.zeros((EAP.shape[0], EAP.shape[1]))
+    if 'Aids' in feat_list:
+        features['Aids'] = np.zeros((EAP.shape[0], EAP.shape[1], 2), dtype=int)
+    if 'Fids' in feat_list:
+        features['Fids'] = []
+    if 'FV' in feat_list:
+        features['fwhm_V'] = np.zeros((EAP.shape[0], EAP.shape[1]))
+    if 'Na' in feat_list:
+        features['na'] = np.zeros((EAP.shape[0], EAP.shape[1]))
+    if 'Rep' in feat_list:
+        features['rep'] = np.zeros((EAP.shape[0], EAP.shape[1]))
+
+    for i in range(EAP.shape[0]):
+        # For AMP feature
+        min_idx = np.array([np.unravel_index(EAP[i, e].argmin(), EAP[i, e].shape)[0] for e in
+                            range(EAP.shape[1])])
+        max_idx = np.array([np.unravel_index(EAP[i, e, min_idx[e]:].argmax(),
+                                             EAP[i, e, min_idx[e]:].shape)[0]
+                            + min_idx[e] for e in range(EAP.shape[1])])
+        # for na and rep
+        min_elid, min_idx_na = np.unravel_index(EAP[i].argmin(), EAP[i].shape)
+        max_idx_rep = EAP[i, min_elid, min_idx_na:].argmax() + min_idx_na
+        na_peak[i, :] = EAP[i, :, min_idx_na]
+        rep_peak[i, :] = EAP[i, :, max_idx_rep]
+
+        if 'Aids' in feat_list:
+            features['Aids'][i] = np.vstack((min_idx, max_idx)).T
+
+        amps[i, :] = np.array([EAP[i, e, max_idx[e]] - EAP[i, e, min_idx[e]] for e in range(EAP.shape[1])])
+        # If below 'detectable threshold, set amp and width to 0
+        if normalize:
+            too_low = np.where(amps[i, :] < threshold_detect / norm[i])
+        else:
+            too_low = np.where(amps[i, :] < threshold_detect)
+        amps[i, too_low] = 0
+
+        if 'R' in feat_list:
+            min_id_ratio = np.array([np.unravel_index(EAP[i, e, min_idx_na:].argmin(),
+                                                      EAP[i, e, min_idx_na:].shape)[0]
+                                     + min_idx_na for e in range(EAP.shape[1])])
+            max_id_ratio = np.array([np.unravel_index(EAP[i, e, min_idx_na:].argmax(),
+                                                      EAP[i, e, min_idx_na:].shape)[0]
+                                     + min_idx_na for e in range(EAP.shape[1])])
+            features['ratio'][i, :] = np.array([np.abs(EAP[i, e, max_id_ratio[e]]) /
+                                                np.abs(EAP[i, e, min_id_ratio[e]])
+                                                for e in range(EAP.shape[1])])
+            # If below 'detectable threshold, set amp and width to 0
+            too_low = np.where(amps[i, :] < threshold_detect)
+            features['ratio'][i, too_low] = 1
+        if 'S' in feat_list:
+            features['speed'][i, :] = np.array((min_idx - min_idx_na) * dt)
+            features['speed'][i, too_low] = min_idx_na * dt
+
+        if 'W' in feat_list:
+            features['widths'][i, :] = np.abs(EAP_times[max_idx] - EAP_times[min_idx])
+            features['widths'][i, too_low] = EAP.shape[2] * dt  # EAP_times[-1]-EAP_times[0]
+
+        if 'F' in feat_list:
+            min_peak = np.min(EAP[i], axis=1)
+            if reference_mode == 't0':
+                # reference voltage is zeroth voltage entry
+                fwhm_ref = np.array([EAP[i, e, 0] for e in range(EAP.shape[1])])
+            elif reference_mode == 'maxd2EAP':
+                # reference voltage is taken at peak onset
+                # peak onset is defined as id of maximum 2nd derivative of EAP
+                peak_onset = np.array([np.argmax(savitzky_golay(EAP[i, e], 5, 2, deriv=2)[:min_idx[e]])
+                                       for e in range(EAP.shape[1])])
+                fwhm_ref = np.array([EAP[i, e, peak_onset[e]] for e in range(EAP.shape[1])])
+            else:
+                raise NotImplementedError('Reference mode ' + reference_mode + ' for FWHM calculation not implemented.')
+            fwhm_V = (fwhm_ref + min_peak) / 2.
+            id_trough = [np.where(EAP[i, e] < fwhm_V[e])[0] for e in range(EAP.shape[1])]
+            if 'Fids' in feat_list:
+                features['Fids'].append(id_trough)
+            if 'FV' in feat_list:
+                features['fwhm_V'][i, :] = fwhm_V
+
+            # linear interpolation due to little number of data points during peak
+
+            # features['fwhm'][i,:] = np.array([(len(t)+1)*dt+(fwhm_V[e]-EAP[i,e,t[0]-1])/(EAP[i,e,t[0]]-EAP[i,e,t[0]-1])*dt -(fwhm_V[e]-EAP[i,e,t[-1]])/(EAP[i,e,min(t[-1]+1,EAP.shape[2]-1)]-EAP[i,e,t[-1]])*dt if len(t)>0 else np.infty for e,t in enumerate(id_trough)])
+
+            # no linear interpolation
+            features['fwhm'][i, :] = [(id_trough[e][-1] - id_trough[e][0]) * dt if len(id_trough[e]) > 1 \
+                                          else EAP.shape[2] * dt for e in range(EAP.shape[1])]
+            features['fwhm'][i, too_low] = EAP.shape[2] * dt  # EAP_times[-1]-EAP_times[0]
+
+    if 'A' in feat_list:
+        features.update({'amps': amps})
+    if 'Na' in feat_list:
+        features.update({'na': na_peak})
+    if 'Rep' in feat_list:
+        features.update({'rep': rep_peak})
+
+    return features
+
+
 
 ############ SPYICA ######################3
 
@@ -266,7 +399,7 @@ def select_cells(loc, spikes, bin_cat, n_exc, n_inh, min_dist=25, bound_x=[], mi
                 # print 'NOPE! ', dist
                 pass
             else:
-                amp = np.max(np.ptp(spikes[id_cell]))
+                amp = np.max(np.abs(spikes[id_cell]))
                 if not drift:
                     if len(bound_x) == 0:
                         if amp > min_amp:
@@ -2231,6 +2364,419 @@ def unit_SNR(sst, sources, times):
         st.annotate(ica_snr=mean_ic_amp/sd)
 
     return np.array(noise_source)
+
+
+def interpolate_template(temp, mea_pos, mea_dim, x_shift=0, y_shift=0):
+    from scipy import interpolate
+    x = mea_pos[:, 1]
+    y = mea_pos[:, 2]
+
+    func = []
+    for t in range(temp.shape[1]):
+        func.append(interpolate.interp2d(x, y, temp[:, t], kind='cubic'))
+
+    x1 = x + x_shift
+    y1 = y + y_shift
+    t_shift = []
+    for f in func:
+        t_shift.append([f(x_, y_) for (x_, y_) in zip(x1, y1)])
+
+    return np.squeeze(np.array(t_shift)).swapaxes(0,1)
+
+
+def convolve_single_template(spike_id, spike_bin, template, modulation=False, amp_mod=None):
+    if len(template.shape) == 2:
+        njitt = template.shape[0]
+        len_spike = template.shape[1]
+    else:
+        len_spike = template.shape[0]
+    spike_pos = np.where(spike_bin == 1)[0]
+    n_samples = len(spike_bin)
+    gt_source = np.zeros(n_samples)
+
+    if len(template.shape) == 2:
+        rand_idx = np.random.randint(njitt)
+        print 'rand_idx: ', rand_idx
+        temp_jitt = template[rand_idx]
+        if not modulation:
+            for pos, spos in enumerate(spike_pos):
+                if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
+                    gt_source[spos - len_spike // 2:spos - len_spike // 2 + len_spike] +=  temp_jitt
+                elif spos - len_spike // 2 < 0:
+                    diff = -(spos - len_spike // 2)
+                    gt_source[:spos - len_spike // 2 + len_spike] += temp_jitt[diff:]
+                else:
+                    diff = n_samples - (spos - len_spike // 2)
+                    gt_source[spos - len_spike // 2:] += temp_jitt[:diff]
+        else:
+            print 'Template-Electrode modulation'
+            for pos, spos in enumerate(spike_pos):
+                if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
+                    gt_source[spos - len_spike // 2:spos - len_spike // 2 + len_spike] += amp_mod[pos]*temp_jitt
+                elif spos - len_spike // 2 < 0:
+                    diff = -(spos - len_spike // 2)
+                    gt_source[:spos - len_spike // 2 + len_spike] += amp_mod[pos]*temp_jitt[diff:]
+                else:
+                    diff = n_samples - (spos - len_spike // 2)
+                    gt_source[spos - len_spike // 2:] += amp_mod[pos]*temp_jitt[:diff]
+    else:
+        print 'No modulation'
+        for pos, spos in enumerate(spike_pos):
+            if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
+                gt_source[spos - len_spike // 2:spos - len_spike // 2 + len_spike] += template
+            elif spos - len_spike // 2 < 0:
+                diff = -(spos - len_spike // 2)
+                gt_source[:spos - len_spike // 2 + len_spike] += template[diff:]
+            else:
+                diff = n_samples - (spos - len_spike // 2)
+                gt_source[spos - len_spike // 2:] += template[:diff]
+
+    return gt_source
+
+
+def convolve_templates_spiketrains(spike_id, spike_bin, template, modulation=False, amp_mod=None, recordings=[]):
+    print 'START: convolution with spike ', spike_id
+    if len(template.shape) == 3:
+        njitt = template.shape[0]
+        n_elec = template.shape[1]
+        len_spike = template.shape[2]
+    else:
+        n_elec = template.shape[0]
+        len_spike = template.shape[1]
+    n_samples = len(spike_bin)
+    if len(recordings) == 0:
+        recordings = np.zeros((n_elec, n_samples))
+
+    # recordings_test = np.zeros((n_elec, n_samples))
+    if not modulation:
+        spike_pos = np.where(spike_bin == 1)[0]
+        amp_mod = np.ones_like(spike_pos)
+        if len(template.shape) == 3:
+            rand_idx = np.random.randint(njitt)
+            print 'rand_idx: ', rand_idx
+            temp_jitt = template[rand_idx]
+            print 'No modulation'
+            for pos, spos in enumerate(spike_pos):
+                if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
+                    recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += amp_mod[pos] * temp_jitt
+                elif spos - len_spike // 2 < 0:
+                    diff = -(spos - len_spike // 2)
+                    recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * temp_jitt[:, diff:]
+                else:
+                    diff = n_samples - (spos - len_spike // 2)
+                    recordings[:, spos - len_spike // 2:] += amp_mod[pos] * temp_jitt[:, :diff]
+        else:
+            print 'No jitter'
+            for pos, spos in enumerate(spike_pos):
+                if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
+                    recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += amp_mod[
+                                                                                                  pos] * template
+                elif spos - len_spike // 2 < 0:
+                    diff = -(spos - len_spike // 2)
+                    recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * template[:, diff:]
+                else:
+                    diff = n_samples - (spos - len_spike // 2)
+                    recordings[:, spos - len_spike // 2:] += amp_mod[pos] * template[:, :diff]
+    else:
+        assert amp_mod is not None
+        spike_pos = np.where(spike_bin == 1)[0]
+        if len(template.shape) == 3:
+            rand_idx = np.random.randint(njitt)
+            print 'rand_idx: ', rand_idx
+            temp_jitt = template[rand_idx]
+            if not isinstance(amp_mod[0], (list, tuple, np.ndarray)):
+                print 'Template modulation'
+                for pos, spos in enumerate(spike_pos):
+                    if spos-len_spike//2 >= 0 and spos-len_spike//2+len_spike <= n_samples:
+                        recordings[:, spos-len_spike//2:spos-len_spike//2+len_spike] +=  amp_mod[pos] * temp_jitt
+                    elif spos-len_spike//2 < 0:
+                        diff = -(spos-len_spike//2)
+                        recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * temp_jitt[:, diff:]
+                    else:
+                        diff = n_samples-(spos - len_spike // 2)
+                        recordings[:, spos - len_spike // 2:] += amp_mod[pos] * temp_jitt[:, :diff]
+            else:
+                print 'Electrode modulation'
+                for pos, spos in enumerate(spike_pos):
+                    if spos-len_spike//2 >= 0 and spos-len_spike//2+len_spike <= n_samples:
+                        recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += \
+                            [a * t for (a, t) in zip(amp_mod[pos], temp_jitt)]
+                    elif spos-len_spike//2 < 0:
+                        diff = -(spos-len_spike//2)
+                        recordings[:, :spos - len_spike // 2 + len_spike] += \
+                            [a * t for (a, t) in zip(amp_mod[pos], temp_jitt[:, diff:])]
+                        # recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * template[:, diff:]
+                    else:
+                        diff = n_samples-(spos - len_spike // 2)
+                        recordings[:, spos - len_spike // 2:] += \
+                            [a * t for (a, t) in zip(amp_mod[pos], temp_jitt[:, :diff])]
+        else:
+            if not isinstance(amp_mod[0], (list, tuple, np.ndarray)):
+                print 'Template modulation'
+                for pos, spos in enumerate(spike_pos):
+                    if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
+                        recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += amp_mod[
+                                                                                                      pos] * template
+                    elif spos - len_spike // 2 < 0:
+                        diff = -(spos - len_spike // 2)
+                        recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * template[:, diff:]
+                    else:
+                        diff = n_samples - (spos - len_spike // 2)
+                        recordings[:, spos - len_spike // 2:] += amp_mod[pos] * template[:, :diff]
+
+            else:
+                print 'Electrode modulation'
+                for pos, spos in enumerate(spike_pos):
+                    if spos-len_spike//2 >= 0 and spos-len_spike//2+len_spike <= n_samples:
+                        recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += \
+                            [a * t for (a, t) in zip(amp_mod[pos], template)]
+                    elif spos-len_spike//2 < 0:
+                        diff = -(spos-len_spike//2)
+                        recordings[:, : spos - len_spike // 2 + len_spike] += \
+                            [a * t for (a, t) in zip(amp_mod[pos], template[:, diff:])]
+                        # recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * template[:, diff:]
+                    else:
+                        diff = n_samples-(spos - len_spike // 2)
+                        recordings[:, spos - len_spike // 2:] += \
+                            [a * t for (a, t) in zip(amp_mod[pos], template[:, :diff])]
+                        # recordings[:, spos - len_spike // 2:] += amp_mod[pos] * template[:, :diff]
+
+
+    print 'DONE: convolution with spike ', spike_id
+
+    return recordings
+
+
+def convolve_drifting_templates_spiketrains(spike_id, spike_bin, template, fs, loc, v_drift, t_start_drift,
+                                            modulation=False, amp_mod=None, recordings=[]):
+    print 'START: convolution with spike ', spike_id
+    if len(template.shape) == 4:
+        njitt = template.shape[1]
+        n_elec = template.shape[2]
+        len_spike = template.shape[3]
+    elif len(template.shape) == 3:
+        n_elec = template.shape[1]
+        len_spike = template.shape[2]
+    n_samples = len(spike_bin)
+    if len(recordings) == 0:
+        recordings = np.zeros((n_elec, n_samples))
+
+    # recordings_test = np.zeros((n_elec, n_samples))
+    if not modulation:
+        spike_pos = np.where(spike_bin == 1)[0]
+        amp_mod = np.ones_like(spike_pos)
+        if len(template.shape) == 4:
+            rand_idx = np.random.randint(njitt)
+            print 'rand_idx: ', rand_idx
+            print 'No modulation'
+            for pos, spos in enumerate(spike_pos):
+                sp_time = spos / fs
+                if sp_time < t_start_drift:
+                    print sp_time, 'No drift', loc[0]
+                    temp_idx = 0
+                    temp_jitt = template[temp_idx, rand_idx]
+                    if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
+                        recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += amp_mod[pos] * temp_jitt
+                    elif spos - len_spike // 2 < 0:
+                        diff = -(spos - len_spike // 2)
+                        recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * temp_jitt[:, diff:]
+                    else:
+                        diff = n_samples - (spos - len_spike // 2)
+                        recordings[:, spos - len_spike // 2:] += amp_mod[pos] * temp_jitt[:, :diff]
+                else:
+                    # compute current position
+                    new_pos = np.array(loc[0, 1:] + v_drift * (sp_time - t_start_drift).rescale('s').magnitude)
+                    temp_idx = np.argmin([np.linalg.norm(p - new_pos) for p in loc[:, 1:]])
+                    print sp_time, temp_idx, 'Drifting', new_pos, loc[temp_idx, 1:]
+                    new_temp_jitt = template[temp_idx, rand_idx]
+                    if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
+                        recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += amp_mod[pos] * new_temp_jitt
+                    elif spos - len_spike // 2 < 0:
+                        diff = -(spos - len_spike // 2)
+                        recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * new_temp_jitt[:, diff:]
+                    else:
+                        diff = n_samples - (spos - len_spike // 2)
+                        recordings[:, spos - len_spike // 2:] += amp_mod[pos] * new_temp_jitt[:, :diff]
+        else:
+            print 'No jitter'
+            for pos, spos in enumerate(spike_pos):
+                sp_time = spos / fs
+                if sp_time < t_start_drift:
+                    temp_idx = 0
+                    if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
+                        recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += amp_mod[pos] \
+                                                                                                  * template[temp_idx]
+                    elif spos - len_spike // 2 < 0:
+                        diff = -(spos - len_spike // 2)
+                        recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * template[temp_idx, :, diff:]
+                    else:
+                        diff = n_samples - (spos - len_spike // 2)
+                        recordings[:, spos - len_spike // 2:] += amp_mod[pos] * template[temp_idx, :, :diff]
+                else:
+                    # compute current position
+                    new_pos = np.array(loc[0, 1:] + v_drift * (sp_time - t_start_drift).rescale('s').magnitude)
+                    temp_idx = np.argmin([np.linalg.norm(p - new_pos) for p in loc[:, 1:]])
+                    new_template = template[temp_idx]
+                    if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
+                        recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += amp_mod[
+                                                                                                      pos] * new_template
+                    elif spos - len_spike // 2 < 0:
+                        diff = -(spos - len_spike // 2)
+                        recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * new_template[:, diff:]
+                    else:
+                        diff = n_samples - (spos - len_spike // 2)
+                        recordings[:, spos - len_spike // 2:] += amp_mod[pos] * new_template[:, :diff]
+    else:
+        assert amp_mod is not None
+        spike_pos = np.where(spike_bin == 1)[0]
+        if len(template.shape) == 4:
+            rand_idx = np.random.randint(njitt)
+            print 'rand_idx: ', rand_idx
+            if not isinstance(amp_mod[0], (list, tuple, np.ndarray)):
+                print 'Template modulation'
+                for pos, spos in enumerate(spike_pos):
+                    sp_time = spos / fs
+                    if sp_time < t_start_drift:
+                        print sp_time, 'No drift', loc[0]
+                        temp_idx = 0
+                        temp_jitt = template[temp_idx, rand_idx]
+                        if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
+                            recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += amp_mod[pos] \
+                                                                                                      * temp_jitt
+                        elif spos - len_spike // 2 < 0:
+                            diff = -(spos - len_spike // 2)
+                            recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * temp_jitt[:, diff:]
+                        else:
+                            diff = n_samples - (spos - len_spike // 2)
+                            recordings[:, spos - len_spike // 2:] += amp_mod[pos] * temp_jitt[:, :diff]
+                    else:
+                        # compute current position
+                        new_pos = np.array(loc[0, 1:] + v_drift * (sp_time - t_start_drift).rescale('s').magnitude)
+                        temp_idx = np.argmin([np.linalg.norm(p - new_pos) for p in loc[:, 1:]])
+                        new_temp_jitt = template[temp_idx, rand_idx]
+                        print sp_time, temp_idx, 'Drifting', new_pos, loc[temp_idx, 1:]
+                        if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
+                            recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += amp_mod[pos] \
+                                                                                                      * new_temp_jitt
+                        elif spos - len_spike // 2 < 0:
+                            diff = -(spos - len_spike // 2)
+                            recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * new_temp_jitt[:, diff:]
+                        else:
+                            diff = n_samples - (spos - len_spike // 2)
+                            recordings[:, spos - len_spike // 2:] += amp_mod[pos] * new_temp_jitt[:, :diff]
+            else:
+                print 'Electrode modulation'
+                for pos, spos in enumerate(spike_pos):
+                    sp_time = spos / fs
+                    if sp_time < t_start_drift:
+                        temp_idx = 0
+                        temp_jitt = template[temp_idx, rand_idx]
+                        print sp_time, 'No drift', loc[0]
+                        if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
+                            recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += \
+                                [a * t for (a, t) in zip(amp_mod[pos], temp_jitt)]
+                        elif spos - len_spike // 2 < 0:
+                            diff = -(spos - len_spike // 2)
+                            recordings[:, :spos - len_spike // 2 + len_spike] += \
+                                [a * t for (a, t) in zip(amp_mod[pos], temp_jitt[:, diff:])]
+                            # recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * template[:, diff:]
+                        else:
+                            diff = n_samples - (spos - len_spike // 2)
+                            recordings[:, spos - len_spike // 2:] += \
+                                [a * t for (a, t) in zip(amp_mod[pos], temp_jitt[:, :diff])]
+                    else:
+                        # compute current position
+                        new_pos = np.array(loc[0, 1:] + v_drift * (sp_time - t_start_drift).rescale('s').magnitude)
+                        temp_idx = np.argmin([np.linalg.norm(p - new_pos) for p in loc[:, 1:]])
+                        new_temp_jitt = template[temp_idx, rand_idx]
+                        print sp_time, temp_idx, 'Drifting', new_pos, loc[temp_idx, 1:]
+                        if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
+                            recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += \
+                                [a * t for (a, t) in zip(amp_mod[pos], new_temp_jitt)]
+                        elif spos - len_spike // 2 < 0:
+                            diff = -(spos - len_spike // 2)
+                            recordings[:, :spos - len_spike // 2 + len_spike] += \
+                                [a * t for (a, t) in zip(amp_mod[pos], new_temp_jitt[:, diff:])]
+                            # recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * template[:, diff:]
+                        else:
+                            diff = n_samples - (spos - len_spike // 2)
+                            recordings[:, spos - len_spike // 2:] += \
+                                [a * t for (a, t) in zip(amp_mod[pos], new_temp_jitt[:, :diff])]
+        else:
+            print 'No jitter'
+            if not isinstance(amp_mod[0], (list, tuple, np.ndarray)):
+                print 'Template modulation'
+                for pos, spos in enumerate(spike_pos):
+                    sp_time = spos / fs
+                    if sp_time < t_start_drift:
+                        temp_idx = 0
+                        temp = template[temp_idx]
+                        if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
+                            recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += amp_mod[pos] \
+                                                                                                      * temp
+                        elif spos - len_spike // 2 < 0:
+                            diff = -(spos - len_spike // 2)
+                            recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * temp[:, diff:]
+                        else:
+                            diff = n_samples - (spos - len_spike // 2)
+                            recordings[:, spos - len_spike // 2:] += amp_mod[pos] * temp[:, :diff]
+                    else:
+                        # compute current position
+                        new_pos = np.array(pos[0, 1:] + v * (sp_time - t_start_drift))
+                        temp_idx = np.argmin([np.linalg.norm(p - new_pos) for p in loc[:, 1:]])
+                        new_template = template[temp_idx]
+                        if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
+                            recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += amp_mod[
+                                                                                                          pos] * new_template
+                        elif spos - len_spike // 2 < 0:
+                            diff = -(spos - len_spike // 2)
+                            recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * new_template[:, diff:]
+                        else:
+                            diff = n_samples - (spos - len_spike // 2)
+                            recordings[:, spos - len_spike // 2:] += amp_mod[pos] * new_template[:, :diff]
+
+            else:
+                print 'Electrode modulation'
+                for pos, spos in enumerate(spike_pos):
+                    sp_time = spos / fs
+                    if sp_time < t_start_drift:
+                        temp_idx = 0
+                        temp = template[temp_idx]
+                        if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
+                            recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += \
+                                [a * t for (a, t) in zip(amp_mod[pos], temp)]
+                        elif spos - len_spike // 2 < 0:
+                            diff = -(spos - len_spike // 2)
+                            recordings[:, :spos - len_spike // 2 + len_spike] += \
+                                [a * t for (a, t) in zip(amp_mod[pos], temp[:, diff:])]
+                            # recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * template[:, diff:]
+                        else:
+                            diff = n_samples - (spos - len_spike // 2)
+                            recordings[:, spos - len_spike // 2:] += \
+                                [a * t for (a, t) in zip(amp_mod[pos], temp[:, :diff])]
+                    else:
+                        # compute current position
+                        new_pos = np.array(pos[0, 1:] + v * (sp_time - t_start_drift))
+                        temp_idx = np.argmin([np.linalg.norm(p - new_pos) for p in loc[:, 1:]])
+                        new_template = template[temp_idx]
+                        if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
+                            recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += \
+                                [a * t for (a, t) in zip(amp_mod[pos], new_template)]
+                        elif spos - len_spike // 2 < 0:
+                            diff = -(spos - len_spike // 2)
+                            recordings[:, :spos - len_spike // 2 + len_spike] += \
+                                [a * t for (a, t) in zip(amp_mod[pos], new_template[:, diff:])]
+                            # recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * template[:, diff:]
+                        else:
+                            diff = n_samples - (spos - len_spike // 2)
+                            recordings[:, spos - len_spike // 2:] += \
+                                [a * t for (a, t) in zip(amp_mod[pos], new_template[:, :diff])]
+
+    final_pos = loc[temp_idx]
+    print 'DONE: convolution with spike ', spike_id
+
+    return recordings, final_pos
+
 
 
 

@@ -97,7 +97,12 @@ class SpikeSorter:
                 self.info = yaml.load(f)
 
             self.electrode_name = self.info['General']['electrode name']
-            self.fs = self.info['General']['fs']
+            fs = self.info['General']['fs']
+            if isinstance(fs, str):
+                self.fs = pq.Quantity(float(fs.split()[0]), fs.split()[1])
+            elif isinstance(fs, pq.Quantity):
+                self.fs = fs
+
             self.times = (range(self.recordings.shape[1]) / self.fs).rescale('s')
 
             # self.overlapping = self.info['Synchrony']['overlap_pairs']
@@ -130,9 +135,13 @@ class SpikeSorter:
                 self.info = yaml.load(f)
 
             self.electrode_name = self.info['General']['electrode name']
-            self.fs = self.info['General']['fs']
-            self.times = (range(self.recordings.shape[1]) / self.fs).rescale('s')
+            fs = self.info['General']['fs']
+            if isinstance(fs, str):
+                self.fs = pq.Quantity(float(fs.split()[0]), fs.split()[1])
+            elif isinstance(fs, pq.Quantity):
+                self.fs = fs
 
+            self.times = (range(self.recordings.shape[1]) / self.fs).rescale('s')
             self.overlapping = self.info['Synchrony']['overlap_pairs']
             # if 'overlap' not in self.gtst[0].annotations.keys():
             #     print 'Finding overlapping spikes'

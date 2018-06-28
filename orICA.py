@@ -359,7 +359,7 @@ class ORICA():
         elif self.adaptiveFF['profile'] == 'adaptive':
             if len(self.minNonStatIdx) != 0:
                 self.minNonStatIdx = self.nonStatIdx
-            self.minNonStatIdx = np.max([np.min(self.minNonStatIdx, self.nonStatIdx), 1])
+            self.minNonStatIdx = np.max([np.min([self.minNonStatIdx, self.nonStatIdx]), 1])
             ratioOfNormRn = self.nonStatIdx / self.minNonStatIdx
             self.lambda_k = self.genAdaptiveFF(dataRange, self.lambda_k, ratioOfNormRn)
 
@@ -469,7 +469,7 @@ class onlineORICAss():
         # onlineWhitening = True
         numSubgaussian = nsub
 
-        self.adaptiveFF = {'profile': forgetfac, 'tau_const': np.inf, 'gamma': 0.6, 'lambda_0': lambda_0, 'decayRateAlpha': 0.02,
+        self.adaptiveFF = {'profile': forgetfac, 'tau_const': np.inf, 'gamma': ffdecayrate, 'lambda_0': lambda_0, 'decayRateAlpha': 0.02,
                       'upperBoundBeta': 1e-3, 'transBandWidthGamma': 1, 'transBandCenter': 5, 'lambdaInitial': 0.1}
         self.evalConvergence = {'profile': evalconverg, 'leakyAvgDelta': 0.01, 'leakyAvgDeltaVar': 1e-3}
 
@@ -496,7 +496,7 @@ class onlineORICAss():
         if self.evalConvergence['profile']:
             self.Rn =[]
             self.nonStatIdx =[]
-            self.minNonStatIdx = []
+            self.minNonStatIdx = -1
             self.Vn=[]
             self.whiteIdx=[]
         self.counter       = 1
@@ -578,6 +578,7 @@ class onlineORICAss():
         self.nskews = []
         self.NSI = []
         self.WI = []
+        self.lambdas = np.array([])
 
         for bi in range(numBlock):
             dataRange = np.arange(int(np.floor(bi * nPts / numBlock)),
@@ -847,6 +848,15 @@ class onlineORICAss():
             self.counter = self.counter + nPts;
         elif self.adaptiveFF['profile'] == 'constant':
             self.lambda_k = np.arange(nPts) * self.adaptiveFF['lambda_0']
+        elif self.adaptiveFF['profile'] == 'adaptive':
+            if self.minNonStatIdx == -1:
+                self.minNonStatIdx = self.nonStatIdx
+            self.minNonStatIdx = np.max([np.min([self.minNonStatIdx, self.nonStatIdx]), 1])
+            ratioOfNormRn = self.nonStatIdx / self.minNonStatIdx
+            self.lambda_k = self.genAdaptiveFF(dataRange, self.lambda_k, ratioOfNormRn)
+
+
+        self.lambdas = np.concatenate((self.lambdas, self.lambda_k))
 
         # update weight matrix using online recursive ICA block update rule
         lambda_prod = np.prod(1. / (1.-self.lambda_k))
@@ -869,6 +879,25 @@ class onlineORICAss():
 
     def genCoolingFF(self, t, gamma, lambda_0):
         lambda_ = lambda_0 / (t ** gamma)
+        return lambda_
+
+    def genAdaptiveFF(self, dataRange, lambda_, ratioOfNormRn):
+        def f(n):
+            return  (1 + gainForErrors) ** n * lambda_[-1] - decayRateAlpha * ((1 + gainForErrors) ** (2 * n - 1) -
+                                                                               (1 + gainForErrors) ** (n - 1)) / \
+                                                                                gainForErrors * lambda_[-1] **2
+        decayRateAlpha = self.adaptiveFF['decayRateAlpha']
+        upperBoundBeta = self.adaptiveFF['upperBoundBeta']
+        transBandWidthGamma = self.adaptiveFF['transBandWidthGamma']
+        transBandCenter = self.adaptiveFF['transBandCenter']
+
+        gainForErrors = upperBoundBeta * 0.5 * (1 + np.tanh((ratioOfNormRn - transBandCenter) / transBandWidthGamma))
+
+        nrange = np.arange(len(dataRange))
+        lambda_ = (1 + gainForErrors) ** nrange * lambda_[-1] - \
+                  decayRateAlpha * ((1 + gainForErrors) ** (2 * nrange - 1) - (1 + gainForErrors) ** (nrange - 1)) \
+                  / gainForErrors * lambda_[-1] **2
+
         return lambda_
 
 
