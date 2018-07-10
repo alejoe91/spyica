@@ -56,7 +56,9 @@ class GenST:
 
         self.seed = seed
         np.random.seed(seed)
-        self.chunk_duration=0*pq.s
+        self.chunk_duration = 0 * pq.s
+        self.noise_chunk_duration = 2 * pq.s
+
 
         self.spike_folder = spike_folder
         self.fs = float(fs) * pq.kHz
@@ -234,8 +236,6 @@ class GenST:
 
         self.spgen.generate_spikes()
 
-
-
         if self.plot_figures:
             ax = self.spgen.raster_plots()
             ax.set_title('Before synchrony')
@@ -313,14 +313,25 @@ class GenST:
         # divide in chunks
         chunks = []
         if self.duration > self.chunk_duration and self.chunk_duration != 0:
-            start=0*pq.s
-            finished=False
+            start = 0 * pq.s
+            finished = False
             while not finished:
-                chunks.append([start, start+self.chunk_duration])
-                start=start+self.chunk_duration
+                chunks.append([start, start + self.chunk_duration])
+                start = start + self.chunk_duration
                 if start >= self.duration:
                     finished = True
             print 'Chunks: ', chunks
+
+        chunks_noise = []
+        if self.duration > self.noise_chunk_duration and self.noise_chunk_duration != 0:
+            start = 0 * pq.s
+            finished = False
+            while not finished:
+                chunks_noise.append([start, start + self.noise_chunk_duration])
+                start = start + self.noise_chunk_duration
+                if start >= self.duration:
+                    finished = True
+            print 'Chunks noise: ', chunks_noise
 
         if len(chunks) > 0:
             recording_chunks = []
@@ -401,24 +412,59 @@ class GenST:
 
         self.clean_recordings = copy(self.recordings)
 
+        # print 'Adding noise'
+        # if self.noise_level > 0:
+        #     if noise_mode == 'uncorrelated':
+        #         self.additive_noise = self.noise_level * np.random.randn(self.recordings.shape[0],
+        #                                                                  self.recordings.shape[1])
+        #         self.recordings += self.additive_noise
+        #     elif noise_mode == 'correlated-dist':
+        #         # TODO divide in chunks
+        #         cov_dist = np.zeros((n_elec, n_elec))
+        #         for i, el in enumerate(mea_pos):
+        #             for j, p in enumerate(mea_pos):
+        #                 if i != j:
+        #                     cov_dist[i, j] = (0.5*np.min(mea_pitch))/np.linalg.norm(el - p)
+        #                 else:
+        #                     cov_dist[i, j] = 1
+        #
+        #         self.additive_noise = np.random.multivariate_normal(np.zeros(n_elec), cov_dist,
+        #                                                        size=(self.recordings.shape[0], self.recordings.shape[1]))
+        #         self.recordings += self.additive_noise
+        # elif self.noise_level == 'experimental':
+        #     print 'experimental noise model'
+        # else:
+        #     print 'Noise level is set to 0'
         print 'Adding noise'
         if self.noise_level > 0:
             if noise_mode == 'uncorrelated':
-                self.additive_noise = self.noise_level * np.random.randn(self.recordings.shape[0],
-                                                                         self.recordings.shape[1])
-                self.recordings += self.additive_noise
+                if len(chunks_noise) > 0:
+                    recording_chunks = []
+                    for ch, chunk in enumerate(chunks_noise):
+                        print 'Generating noise chunk ', ch + 1, ' of ', len(chunks_noise)
+                        idxs = np.where((self.times >= chunk[0]) & (self.times < chunk[1]))[0]
+                        additive_noise = self.noise_level * np.random.randn(self.recordings.shape[0],
+                                                                            len(idxs))
+                        self.recordings[:, idxs] += additive_noise
+                else:
+                    # self.additive_noise = self.noise_level * np.random.randn(self.recordings.shape[0],
+                    #                                                          self.recordings.shape[1])
+                    self.recordings += self.noise_level * np.random.randn(self.recordings.shape[0],
+                                                                          self.recordings.shape[1])
             elif noise_mode == 'correlated-dist':
                 # TODO divide in chunks
                 cov_dist = np.zeros((n_elec, n_elec))
                 for i, el in enumerate(mea_pos):
                     for j, p in enumerate(mea_pos):
                         if i != j:
-                            cov_dist[i, j] = (0.5*np.min(mea_pitch))/np.linalg.norm(el - p)
+                            cov_dist[i, j] = (0.5 * np.min(mea_pitch)) / np.linalg.norm(el - p)
                         else:
                             cov_dist[i, j] = 1
 
                 self.additive_noise = np.random.multivariate_normal(np.zeros(n_elec), cov_dist,
-                                                               size=(self.recordings.shape[0], self.recordings.shape[1]))
+                                                                    size=(
+                                                                        self.recordings.shape[0],
+                                                                        self.recordings.shape[1]))
                 self.recordings += self.additive_noise
         elif self.noise_level == 'experimental':
             print 'experimental noise model'

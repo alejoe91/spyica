@@ -100,7 +100,7 @@ if __name__ == '__main__':
     conf_id = confusion_matrix(gtst_id, sst, pairs_id[:, 1])
 
     if plot_fig:
-        plot_matched_raster(gtst_red, sst, pairs)
+        ax1, ax2 = plot_matched_raster(gtst_red, sst, pairs)
 
     # save results
     # if not os.path.isdir(join(self.yass_folder, 'results')):

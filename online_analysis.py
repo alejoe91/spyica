@@ -10,7 +10,7 @@ from scipy import stats
 from scipy.linalg import sqrtm
 from scipy.linalg import eigh
 from scipy.linalg import LinAlgError
-from sklearn.decomposition import PCA
+from sklearn.decomposition import PCA, IncrementalPCA
 from spike_sorting import *
 import pandas as pd
 from tools import *
@@ -37,6 +37,11 @@ if __name__ == '__main__':
         ndim = int(sys.argv[pos + 1])
     else:
         ndim = 'all'
+    if '-ff' in sys.argv:
+        pos = sys.argv.index('-ff')
+        ff = sys.argv[pos + 1]
+    else:
+        ff = 'cooling'
 
     plot_fig = False
     save_res = False
@@ -76,9 +81,16 @@ if __name__ == '__main__':
     adj_graph = extract_adjacency(mea_pos, np.max(mea_pitch) + 5)
     n_sources = sources.shape[0]
     # lambda_val = 0.01
-    lambda_val = 0.995
+    if ff == 'cooling':
+        lambda_val = 0.995
+    elif ff == 'constant':
+        lambda_val = 0.0078
+    else:
+        lambda_val = 0.1
+
     # ff = 'cooling'
-    ff = 'adaptive'
+    # ff = 'adaptive'
+    # ff = 'cooling'
     ffdecayrate=0.5
 
     online = False
@@ -110,8 +122,9 @@ if __name__ == '__main__':
         else:
             a_t[i] = a_ / np.max(np.abs(a_))
 
-    last_idxs = find_consistent_sorces(ori.source_idx, thresh=0.5)
-    last_idxs = last_idxs[np.argsort(np.abs(stats.skew(ori.y[last_idxs], axis=1)))[::-1]]
+    last_idxs = find_consistent_sorces(ori.source_idx, thresh=0.3)
+    skew_order = np.argsort(np.abs(stats.skew(ori.y[last_idxs], axis=1)))[::-1]
+    last_idxs = last_idxs[skew_order]
     n_id = len(last_idxs)
 
     a_selected_final = ori.mixing[-1][last_idxs]
@@ -151,36 +164,68 @@ if __name__ == '__main__':
 
     if plot_fig:
         plt.matshow(corr_time.T)
-        plot_mixing(sorted_mixing.T, mea_pos, mea_dim)
-        plot_mixing(sorted_a.T, mea_pos, mea_dim)
+        plot_mixing(sorted_mixing.T, mea_dim)
+        plot_mixing(sorted_a.T, mea_dim)
 
 
     ## Non-stationatiry
 
     # Detection and evaluation
     if detect:
-        nsamples = int((2*fs.rescale('Hz')).magnitude)
-        ## User defined thresholds and detection
+
+        print('Rough spike detection to choose thresholds')
+        detected_spikes = detect_and_align(sorted_y_on, fs, recordings, n_std=8,
+                                                ref_period=2*pq.ms, upsample=1)
+
+        # Manual thresholding
         thresholds = []
-        for i, s in enumerate(sorted_y_on):
+        for i, st in enumerate(detected_spikes):
             fig = plt.figure()
-            plt.plot(s[-nsamples:])
-            plt.title('IC  ' + str(i+1))
+            plt.plot(st.annotations['ica_wf'].T, lw=0.1, color='g')
+            plt.title('IC  ' + str(i + 1))
             coord = plt.ginput()
             th = coord[0][1]
             plt.close(fig)
             thresholds.append(th)
 
+        ## User defined thresholds and detection
+        print('Detecting spikes based on user-defined thresholds')
         spikes = threshold_spike_sorting(sorted_y_on, thresholds)
 
         # Convert spikes to neo
-        sst = []
+        spike_trains = []
         for i, k in enumerate(np.sort(spikes.keys())):
             t = spikes[k]
             tt = t / fs
-            st = neo.SpikeTrain(times=tt, t_start=(pca_window+ica_window)*pq.s, t_stop=gtst[0].t_stop)
+            st = neo.SpikeTrain(times=tt, t_start=0 * pq.s, t_stop=gtst[0].t_stop)
             st.annotate(ica_source=k)
-            sst.append(st)
+            spike_trains.append(st)
+
+        sst, independent_spike_idx, dup = reject_duplicate_spiketrains(spike_trains)
+
+
+        # nsamples = int((2*fs.rescale('Hz')).magnitude)
+        # ## User defined thresholds and detection
+        # thresholds = []
+        # for i, s in enumerate(sorted_y_on):
+        #     fig = plt.figure()
+        #     plt.plot(s[-nsamples:])
+        #     plt.title('IC  ' + str(i+1))
+        #     coord = plt.ginput()
+        #     th = coord[0][1]
+        #     plt.close(fig)
+        #     thresholds.append(th)
+        #
+        # spikes = threshold_spike_sorting(sorted_y_on, thresholds)
+        #
+        # # Convert spikes to neo
+        # sst = []
+        # for i, k in enumerate(np.sort(spikes.keys())):
+        #     t = spikes[k]
+        #     tt = t / fs
+        #     st = neo.SpikeTrain(times=tt, t_start=(pca_window+ica_window)*pq.s, t_stop=gtst[0].t_stop)
+        #     st.annotate(ica_source=k)
+        #     sst.append(st)
 
         if 'ica_wf' not in sst[0].annotations.keys():
             extract_wf(sst, recordings, times, fs, ica=True, sources=sorted_y_on)
@@ -188,8 +233,11 @@ if __name__ == '__main__':
         gtst_red = [gt.time_slice(t_start=(pca_window+ica_window)*pq.s, t_stop=gtst[0].t_stop)
                     for gt in np.array(gtst)[np.sort(idx_truth)]]
 
+        sst_red = [st.time_slice(t_start=(pca_window + ica_window) * pq.s, t_stop=gtst[0].t_stop)
+                    for st in sst]
+
         # # use pairs from mixing and only detected gtst
-        counts, pairs = evaluate_spiketrains(gtst_red, sst, pairs=pairs, t_jitt=3*pq.ms)
+        counts, pairs = evaluate_spiketrains(gtst_red, sst_red, pairs=pairs, t_jitt=3*pq.ms)
         perf = compute_performance(counts)
 
         fig = plt.figure()
@@ -197,15 +245,15 @@ if __name__ == '__main__':
         ax2 = fig.add_subplot(212)
 
         raster_plots(np.array(gtst_red), color_st=pairs[:, 0], ax=ax1, marker='|')
-        raster_plots(np.array(sst), color_st=pairs[:, 1], ax=ax2, marker='|')
+        raster_plots(np.array(sst_red), color_st=pairs[:, 1], ax=ax2, marker='|')
 
         ax1.set_title('GTST', fontsize=15)
         ax2.set_title('SST', fontsize=15)
 
         simplify_axes([ax1, ax2])
 
-        ax1.set_xlim([100, 102])
-        ax2.set_xlim([100, 102])
+        # ax1.set_xlim([100, 102])
+        # ax2.set_xlim([100, 102])
 
         fig.tight_layout()
 

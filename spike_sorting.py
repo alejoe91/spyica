@@ -29,7 +29,7 @@ root_folder = os.getcwd()
 class SpikeSorter:
     def __init__(self, save=False, rec_folder=None, alg=None, lag=None, gfmode=None, duration=None,
                  tstart=None, tstop=None, run_ss=None, plot_figures=True, merge_spikes=False, mu=0, eta=0,
-                 npass=1, block=1000, feat='pca', clust='mog', keepall=True, ndim=None):
+                 npass=1, block=1000, feat='pca', clust='mog', keepall=True, ndim=None, eval=False):
         '''
 
         Parameters
@@ -1012,7 +1012,8 @@ class SpikeSorter:
 
                 self.processing_time = time.time() - t_start_proc
 
-                last_idxs = find_consistent_sorces(self.ori.source_idx, thresh=0.5)
+                # last_idxs = find_consistent_sorces(self.ori.source_idx, thresh=0.5)
+                last_idxs = ori.all_sources
                 last_idxs = last_idxs[np.argsort(np.abs(stats.skew(self.ori.y[last_idxs], axis=1)))[::-1]]
                 n_id = len(last_idxs)
 
@@ -1028,8 +1029,11 @@ class SpikeSorter:
                 nsamples = int((5 * self.fs.rescale('Hz')).magnitude)
                 self.thresholds = []
                 for i, st in enumerate(self.detected_spikes):
-                    fig = plt.figure()
-                    plt.plot(st.annotations['ica_wf'].T, lw=0.1, color='g')
+                    fig = plt.figure(figsize=(10,10))
+                    # only plot 10% of the spikes
+                    perm = np.random.permutation(len(st))
+                    nperm = int(0.2 * len(st))
+                    plt.plot(st.annotations['ica_wf'][perm[:nperm]].T, lw=0.1, color='g')
                     plt.title('IC  ' + str(i + 1))
                     coord = plt.ginput()
                     th = coord[0][1]
@@ -1745,6 +1749,33 @@ class SpikeSorter:
 
         print 'DONE'
 
+        if eval:
+            print 'Matching spike trains'
+            self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst, t_jitt=3 * pq.ms)
+
+            print 'PAIRS: '
+            print self.pairs
+
+            print 'Computing performance'
+            self.performance = compute_performance(self.counts)
+
+            print 'Calculating confusion matrix'
+            self.conf = confusion_matrix(self.gtst, self.sst, self.pairs[:, 1])
+
+            # print 'Matching only identified spike trains'
+            # pairs_gt_red = pairs[:, 0][np.where(pairs[:, 0] != -1)]
+            # gtst_id = np.array(gtst_red)[pairs_gt_red]
+            # counts_id, pairs_id = evaluate_spiketrains(gtst_id, sst, t_jitt=3 * pq.ms)
+            #
+            # print 'Computing performance on only identified spike trains'
+            # performance_id = compute_performance(counts_id)
+            #
+            # print 'Calculating confusion matrix'
+            # conf_id = confusion_matrix(gtst_id, sst, pairs_id[:, 1])
+
+            if plot_figures:
+                ax1, ax2 = plot_matched_raster(self.gtst, self.sst, self.pairs)
+
 
     def plot_results(self):
         fig = plt.figure()
@@ -1847,6 +1878,10 @@ if __name__ == '__main__':
         save = False
     else:
         save = True
+    if '-eval' in sys.argv:
+        eval = True
+    else:
+        eval = False
 
     debug = False
     if debug:
@@ -1854,7 +1889,7 @@ if __name__ == '__main__':
                    '10.0s_uncorrelated_10.0_5.0Hz_15.0Hz_modulation_noise-all_10-05-2018:11:37_3002/'
         block=100
         mod='picard'
-        feat='pca'
+        feat='zca'
         keepall=True
 
     if len(sys.argv) == 1 and not debug:
@@ -1868,4 +1903,4 @@ if __name__ == '__main__':
         sps = SpikeSorter(save=save, rec_folder=rec_folder, alg=mod, duration=dur,
                           tstart=tstart, tstop=tstop, run_ss=spikesort, plot_figures=plot_figures,
                           merge_spikes=merge_spikes, mu=mu, eta=eta, npass=npass, block=block, feat=feat,
-                          clust=clust, keepall=keepall, ndim=ndim)
+                          clust=clust, keepall=keepall, ndim=ndim, eval=eval)

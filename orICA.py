@@ -98,6 +98,7 @@ class ORICA():
         self.whiten = whiten
         self.ortho = ortho
         self.ndim = ndim
+        self.tracking = True
 
         numPass = numpass
         verbose = verbose
@@ -115,6 +116,9 @@ class ORICA():
         self.mu = mu
         self.eta = eta
 
+        self.lambdas = np.array([])
+
+
         ##############################
         # initialize state variables #
         ##############################
@@ -130,16 +134,18 @@ class ORICA():
             else:
                 icasphere = np.eye(self.ndim, nChs)
 
-        self.lambda_k = np.zeros((1, blockSizeICA))
         self.counter       = 1
 
         if self.adaptiveFF['profile'] == 'cooling' or  self.adaptiveFF['profile'] == 'constant':
             self.adaptiveFF['lambda_const']  = 1-np.exp(-1 / (self.adaptiveFF['tau_const']))
+            self.lambda_k = np.zeros(blockSizeICA)
+        else: # adaptive
+            self.lambda_k = self.adaptiveFF['lambdaInitial'] * np.ones(blockSizeICA)
 
         if self.evalConvergence['profile']:
             self.Rn =[]
-            self.nonStatIdx =[]
-            self.minNonStatIdx = []
+            self.nonStatIdx = []
+            self.minNonStatIdx = -1
             self.Vn=[]
             self.whiteIdx=[]
 
@@ -166,7 +172,7 @@ class ORICA():
                         icasphere = sphere
                     elif white_mode == 'zca':
                         print('ZCA whitening')
-                        icasphere = 2.0 * la.inv(sqrtm(np.cov(data)))
+                        icasphere = 2. * la.inv(sqrtm(np.cov(data)))
                         data_w = np.matmul(icasphere, data)
                 else:
                     # data_w = np.matmul(icasphere, data)
@@ -357,11 +363,13 @@ class ORICA():
         elif self.adaptiveFF['profile'] == 'constant':
             self.lambda_k = np.arange(nPts) * self.adaptiveFF['lambda_0']
         elif self.adaptiveFF['profile'] == 'adaptive':
-            if len(self.minNonStatIdx) != 0:
+            if self.minNonStatIdx != -1:
                 self.minNonStatIdx = self.nonStatIdx
             self.minNonStatIdx = np.max([np.min([self.minNonStatIdx, self.nonStatIdx]), 1])
             ratioOfNormRn = self.nonStatIdx / self.minNonStatIdx
             self.lambda_k = self.genAdaptiveFF(dataRange, self.lambda_k, ratioOfNormRn)
+
+        self.lambdas = np.concatenate((self.lambdas, self.lambda_k))
 
         # update weight matrix using online recursive ICA block update rule
         lambda_prod = np.prod(1. / (1.-self.lambda_k))
@@ -405,19 +413,20 @@ class ORICA():
         lambda_ = lambda_0 / (t ** gamma)
         return lambda_
 
-    def genAdaptiveFF(self, dataRange, lambda_, ratioOfNormRn):
+    def genAdaptiveFF(self, dataRange, lambda_in, ratioOfNormRn):
         decayRateAlpha = self.adaptiveFF['decayRateAlpha']
         upperBoundBeta = self.adaptiveFF['upperBoundBeta']
         transBandWidthGamma = self.adaptiveFF['transBandWidthGamma']
         transBandCenter = self.adaptiveFF['transBandCenter']
 
         gainForErrors = upperBoundBeta * 0.5 * (1 + np.tanh((ratioOfNormRn - transBandCenter) / transBandWidthGamma))
-        def f(n):
-            return  (1 + gainForErrors) ** n * lambda_[-1] - decayRateAlpha * ((1 + gainForErrors) ** (2 * n - 1) -
-                                                                               (1 + gainForErrors) ** (n - 1)) / \
-                                                                                gainForErrors * lambda_[-1] **2
-        lambda_ = f(range(len(dataRange)))
-
+        nrange = np.arange(len(dataRange))
+        lambda_ = np.zeros(len(dataRange))
+        lam_pr = lambda_in[-1]
+        for i in nrange:
+            lam_new = (1 + gainForErrors) * lam_pr - decayRateAlpha * lam_pr **2
+            lambda_[i] = lam_new
+            lam_pr = lam_new
         return lambda_
 
 
@@ -460,6 +469,9 @@ class onlineORICAss():
         self.n_pca_window = int(fs*pca_window)
         self.n_ica_window = int(fs*ica_window)
         self.n_step_size = int(fs*step_size)
+        self.n_trackin_window = int(fs * 10. / block)
+        print(self.n_trackin_window)
+        self.tracking = True
 
         self.detect_thresh = detect_trheshold
         self.block = block
@@ -469,9 +481,10 @@ class onlineORICAss():
         # onlineWhitening = True
         numSubgaussian = nsub
 
-        self.adaptiveFF = {'profile': forgetfac, 'tau_const': np.inf, 'gamma': ffdecayrate, 'lambda_0': lambda_0, 'decayRateAlpha': 0.02,
-                      'upperBoundBeta': 1e-3, 'transBandWidthGamma': 1, 'transBandCenter': 5, 'lambdaInitial': 0.1}
-        self.evalConvergence = {'profile': evalconverg, 'leakyAvgDelta': 0.01, 'leakyAvgDeltaVar': 1e-3}
+        self.adaptiveFF = {'profile': forgetfac, 'tau_const': np.inf, 'gamma': ffdecayrate, 'lambda_0': lambda_0,
+                           'decayRateAlpha': 0.02, 'upperBoundBeta': 1e-3, 'transBandWidthGamma': 0.3,
+                           'transBandCenter': 0, 'lambdaInitial': 0.1}
+        self.evalConvergence = {'profile': evalconverg, 'leakyAvgDelta': 0.005, 'leakyAvgDeltaVar': 1e-3}
 
 
         ##############################
@@ -491,7 +504,10 @@ class onlineORICAss():
         # else:
         #     onlineWhitening = False
 
-        self.lambda_k = np.zeros((1, block))
+        if self.adaptiveFF['profile'] == 'adaptive':
+            self.lambda_k = self.adaptiveFF['lambdaInitial'] * np.ones(block)
+        else:
+            self.lambda_k = np.zeros(block)
 
         if self.evalConvergence['profile']:
             self.Rn =[]
@@ -563,6 +579,10 @@ class onlineORICAss():
         self.idx_sources = []
         self.means = np.zeros(nChs)
         self.sumx = np.zeros(nChs)
+        self.ratiosumx = 0
+        self.ratiosumx2 = 0
+        self.iter = 0
+        self.tracking_iter = 0
 
         if verbose:
             printflag = 0
@@ -570,6 +590,8 @@ class onlineORICAss():
                 print('Running ORICA with cooling forgetting factor...')
             elif self.adaptiveFF['profile'] == 'constant':
                 print('Running ORICA with constant forgetting factor...')
+            elif self.adaptiveFF['profile'] == 'adaptive':
+                print('Running ORICA with adaptive forgetting factor...')
 
         t_start = time.time()
         self.init = False
@@ -579,6 +601,10 @@ class onlineORICAss():
         self.NSI = []
         self.WI = []
         self.lambdas = np.array([])
+        self.ratios = np.array([])
+        self.normNSI = np.array([])
+        self.NSImean = 0
+        self.NSIvar = 0
 
         for bi in range(numBlock):
             dataRange = np.arange(int(np.floor(bi * nPts / numBlock)),
@@ -588,8 +614,12 @@ class onlineORICAss():
 
             if calibratePCA:
                 self.calibratePCA(data)
-            elif onlineWhitening:
+
+            if onlineWhitening:
                 self.dynamicWhitening(data[:, dataRange], dataRange)
+            else:
+                # compute WI
+                self.dynamicWhitening(data[:, dataRange], dataRange, whitening=False)
 
             if self.N > self.n_pca_window:
                 data_cent = data[:, dataRange] - self.means
@@ -597,7 +627,6 @@ class onlineORICAss():
                     data_white = np.matmul(self.icasphere[:self.ndim], data_cent)
                 else:
                     data_white = np.matmul(self.icasphere, data_cent)
-
                 self.dynamicOrica(data_white, dataRange)
 
             if self.N > self.n_pca_window + self.n_ica_window:
@@ -735,40 +764,31 @@ class onlineORICAss():
         self.means = 1. / self.N * (self.sumx[:, np.newaxis] + np.sum(blockdata, axis=1, keepdims=True))
         self.sumx += np.sum(blockdata, axis=1)
 
-    # def updateSourceStats(self, blockdata):
-    #
-    #     y = np.matmul(self.state.icaweights, blockdata).T
-    #
-    #     if self.N == 0:
-    #         self.N = blockdata.shape[1]
-    #
-    #         self.mu = 1. / self.N * np.sum(y, axis=0)
-    #         self.var = 1. / (self.N - 1) * np.sum((y - self.mu) ** 2, axis=0)
-    #         self.sigma = np.sqrt(self.var)
-    #         self.skew = 1. / (self.N - 2) * np.sum(((y - self.mu)/self.sigma)**3, axis=0)
-    #
-    #         self.sumx = np.sum(y, axis=0)
-    #         self.sumx2 = np.sum(y ** 2, axis=0)
-    #         self.sumx3 = np.sum(y ** 3, axis=0)
-    #     else:
-    #         self.N += blockdata.shape[1]
-    #
-    #         self.mu = 1. / self.N * (self.sumx + np.sum(y, axis=0))
-    #         self.var = 1. / (self.N - 1) * (self.sumx2 + self.mu ** 2 - 2 * self.sumx * self.mu +
-    #                                         np.sum((y - self.mu) ** 2, axis=0))
-    #         self.sigma = np.sqrt(self.var)
-    #         self.skew = 1. / ((self.N - 2) * self.sigma ** 3) * \
-    #                     (self.sumx3 - 3 * self.sumx2 * self.mu + 3 * self.sumx * self.mu ** 2 +
-    #                      np.sum((y - self.mu) ** 3, axis=0))
-    #
-    #         self.sumx += np.sum(y, axis=0)
-    #         self.sumx2 += np.sum(y**2, axis=0)
-    #         self.sumx3 += np.sum(y**3, axis=0)
-    #
-    #     self.mus.append(self.mu)
-    #     self.vars.append(self.var)
-    #     self.sigmas.append(self.sigma)
-    #     self.skews.append(self.skew)
+    def onlineNSIUpdate(self, newNSI, ff=None):
+        if ff == None:
+            if self.iter > 1:
+                ff = 1. /(self.iter - 1)
+            else:
+                ff = 1.
+
+        if self.iter > 1:
+            self.NSImean = (1 - ff) * self.NSImean + ff * newNSI
+            self.NSIvar = (1 - ff) * self.NSIvar + ff * (1 - ff) * (newNSI - self.NSImean) ** 2
+        else:
+            self.NSImean = newNSI
+            self.NSIvar = 1.
+
+        normNSI = (newNSI - self.NSImean) / np.sqrt(self.NSIvar)
+        if normNSI > self.adaptiveFF['transBandCenter']:
+            self.tracking = True
+        # else:
+        #     if self.tracking:
+        #         self.tracking = False
+        #         self.tracking_iter = 0
+        #         print('STOP TRACKING')
+
+        return normNSI
+
 
     def calibratePCA(self, data):
         if self.N >= self.n_pca_window and not self.pca_calibrated:
@@ -782,7 +802,7 @@ class onlineORICAss():
             self.pca_calibrated = True
 
 
-    def dynamicWhitening(self, blockdata, dataRange):
+    def dynamicWhitening(self, blockdata, dataRange, whitening=True):
         nChs, nPts = blockdata.shape
 
         if self.adaptiveFF['profile'] == 'cooling':
@@ -790,8 +810,7 @@ class onlineORICAss():
             if lambda_[0] < self.adaptiveFF['lambda_const']:
                 lambda_ = np.squeeze(np.tile(self.adaptiveFF['lambda_const'], (1, nPts)))
         elif self.adaptiveFF['profile'] == 'constant':
-            lambda_ = np.squeeze(np.tile(self.adaptiveFF['lambda_const'], (1, nPts)))
-
+            lambda_ = np.ones(nPts) * self.adaptiveFF['lambda_0']
 
         v = np.matmul(self.icasphere, blockdata) # pre - whitened data
 
@@ -804,12 +823,14 @@ class onlineORICAss():
                                 self.evalConvergence['leakyAvgDelta'] * modelFitness
                 #!!! this does not account for block update!
             self.whiteIdx = la.norm(self.Vn)
+            # self.whiteIdx = la.norm(modelFitness)
             self.WI.append(self.whiteIdx)
 
-        lambda_avg = 1 - lambda_[int(np.ceil(len(lambda_) / 2))] # median lambda
-        QWhite = lambda_avg / (1-lambda_avg) + np.trace(np.matmul(v, v.T)) / nPts
-        self.icasphere = 1 / lambda_avg * (self.icasphere - np.matmul(np.matmul(v, v.T) / nPts
-                                            / QWhite,self.icasphere))
+        if whitening:
+            lambda_avg = 1 - lambda_[int(np.ceil(len(lambda_) / 2))] # median lambda
+            QWhite = lambda_avg / (1-lambda_avg) + np.trace(np.matmul(v, v.T)) / nPts
+            self.icasphere = 1 / lambda_avg * (self.icasphere - np.matmul(np.matmul(v, v.T) / nPts
+                                                / QWhite,self.icasphere))
 
 
     def dynamicOrica(self, blockdata, dataRange, nlfunc=None):
@@ -838,7 +859,12 @@ class onlineORICAss():
                                 self.evalConvergence['leakyAvgDelta'] * modelFitness
                 # !!! this does not account for block update!
             self.nonStatIdx = la.norm(self.Rn)
+            # self.nonStatIdx = la.norm(modelFitness)
             self.NSI.append(self.nonStatIdx)
+            if self.N > self.n_pca_window + self.n_ica_window:
+                self.iter += 1
+                nsinorm = self.onlineNSIUpdate(self.nonStatIdx, ff=0.003)
+                self.normNSI = np.append(self.normNSI, nsinorm)
 
         if self.adaptiveFF['profile'] == 'cooling':
             self.lambda_k = self.genCoolingFF(self.counter + dataRange, self.adaptiveFF['gamma'],
@@ -847,16 +873,18 @@ class onlineORICAss():
                 self.lambda_k = np.squeeze(np.tile(self.adaptiveFF['lambda_const'], (1, nPts)))
             self.counter = self.counter + nPts;
         elif self.adaptiveFF['profile'] == 'constant':
-            self.lambda_k = np.arange(nPts) * self.adaptiveFF['lambda_0']
+            self.lambda_k = np.ones(nPts) * self.adaptiveFF['lambda_0']
         elif self.adaptiveFF['profile'] == 'adaptive':
             if self.minNonStatIdx == -1:
                 self.minNonStatIdx = self.nonStatIdx
             self.minNonStatIdx = np.max([np.min([self.minNonStatIdx, self.nonStatIdx]), 1])
             ratioOfNormRn = self.nonStatIdx / self.minNonStatIdx
-            self.lambda_k = self.genAdaptiveFF(dataRange, self.lambda_k, ratioOfNormRn)
-
+            # self.lambda_k = self.genAdaptiveFF(dataRange, self.lambda_k, ratioOfNormRn)
+            self.lambda_k = self.genAdaptiveFF(dataRange, self.lambda_k, self.normNSI[-1])
+            self.ratios = np.append(self.ratios, ratioOfNormRn)
 
         self.lambdas = np.concatenate((self.lambdas, self.lambda_k))
+
 
         # update weight matrix using online recursive ICA block update rule
         lambda_prod = np.prod(1. / (1.-self.lambda_k))
@@ -866,6 +894,10 @@ class onlineORICAss():
         self.icaweights = lambda_prod * (self.icaweights -
                                                np.matmul(np.matmul(np.matmul(y, np.diag(self.lambda_k / Q)),
                                                                 f.T), self.icaweights))
+
+        if np.any(np.isnan(np.matmul(self.icaweights, self.icaweights.T))) or \
+                np.any(np.isinf(np.matmul(self.icaweights, self.icaweights.T))):
+            raise Exception()
 
         # orthogonalize weight matrix
         try:
@@ -881,23 +913,45 @@ class onlineORICAss():
         lambda_ = lambda_0 / (t ** gamma)
         return lambda_
 
-    def genAdaptiveFF(self, dataRange, lambda_, ratioOfNormRn):
-        def f(n):
-            return  (1 + gainForErrors) ** n * lambda_[-1] - decayRateAlpha * ((1 + gainForErrors) ** (2 * n - 1) -
-                                                                               (1 + gainForErrors) ** (n - 1)) / \
-                                                                                gainForErrors * lambda_[-1] **2
+    def genAdaptiveFF(self, dataRange, lambda_in, ratioOfNormRn):
         decayRateAlpha = self.adaptiveFF['decayRateAlpha']
         upperBoundBeta = self.adaptiveFF['upperBoundBeta']
         transBandWidthGamma = self.adaptiveFF['transBandWidthGamma']
         transBandCenter = self.adaptiveFF['transBandCenter']
 
         gainForErrors = upperBoundBeta * 0.5 * (1 + np.tanh((ratioOfNormRn - transBandCenter) / transBandWidthGamma))
-
         nrange = np.arange(len(dataRange))
-        lambda_ = (1 + gainForErrors) ** nrange * lambda_[-1] - \
-                  decayRateAlpha * ((1 + gainForErrors) ** (2 * nrange - 1) - (1 + gainForErrors) ** (nrange - 1)) \
-                  / gainForErrors * lambda_[-1] **2
 
+        lambda_ = np.zeros(len(dataRange))
+        lam_pr = lambda_in[-1]
+        for i in nrange:
+            lam_new = (1+gainForErrors) * lam_pr - decayRateAlpha * lam_pr ** 2
+            lambda_[i] = lam_new
+            lam_pr = lam_new
+
+        # if self.tracking:
+        #     # lam_pr = lambda_in[-1]
+        #     if self.tracking_iter == 0:
+        #         lam_pr = lambda_tracking
+        #         print(self.iter, 'TRACKING')
+        #     else:
+        #         lam_pr = lambda_in[-1]
+        #     for i in nrange:
+        #         # lam_new = (1 + gainForErrors) * lam_pr - decayRateAlpha * lam_pr ** 2
+        #         lam_new = lam_pr - decayRateAlpha * lam_pr ** 2
+        #         lambda_[i] = lam_new
+        #         lam_pr = lam_new
+        #     self.tracking_iter += 1
+        #     if self.tracking_iter > self.n_trackin_window:
+        #         self.tracking = False
+        #         self.tracking_iter = 0
+        #         print ('STOP TRACKING: max iter')
+        # else:
+        #     lam_pr = lambda_in[-1]
+        #     for i in nrange:
+        #         lam_new = lam_pr - decayRateAlpha * lam_pr ** 2
+        #         lambda_[i] = lam_new
+        #         lam_pr = lam_new
         return lambda_
 
 
@@ -2190,15 +2244,21 @@ if __name__ == '__main__':
         #          'physrot_Neuronexus-32-cut-30_15_60.0s_uncorrelated_10.0_5.0Hz_15.0Hz_modulation_noise-all_29-05-2018:16:38_2416'
         # folder= 'recordings/convolution/gtica/SqMEA-10-15um/recording_ica_physrot_SqMEA-10-15um_10_20.0s_' \
         #         'uncorrelated_5.0_5.0Hz_15.0Hz_modulation_none_13-06-2018:10:22_7593/'
-        folder = 'recordings/convolution/gtica/SqMEA-10-15um/recording_ica_physrot_SqMEA-10-15um_10_120.0s' \
-                 '_uncorrelated_5.0_5.0Hz_15.0Hz_modulation_none_13-06-2018:10:09_6730/'
-        block = 1000
+        # folder = '/home/alessio/Documents/Codes/SpyICA/recordings/convolution/gtica/Neuronexus-32-cut-30/recording_' \
+        #          'ica_physrot_Neuronexus-32-cut-30_10_60.0s_uncorrelated_10.0_5.0Hz_15.0Hz_modulation_none_04-06-2018:13:29_4236'
+        folder = 'recordings/convolution/intermittent/Neuronexus-32-cut-30/recording_physrot_Neuronexus-32-cut-30_10_' \
+                 '60.0s_uncorrelated_10.0_5.0Hz_15.0Hz_modulation_none_27-06-2018:15:56_1514_intermittent'
+        block = 800
         recordings = np.load(join(folder, 'recordings.npy')).astype('int16')
         rec_info = [f for f in os.listdir(folder) if '.yaml' in f or '.yml' in f][0]
         with open(join(folder, rec_info), 'r') as f:
             info = yaml.load(f)
         electrode_name = info['General']['electrode name']
         fs = info['General']['fs']
+        if isinstance(fs, str):
+            fs = pq.Quantity(float(fs.split()[0]), fs.split()[1])
+        elif isinstance(fs, pq.Quantity):
+            fs = fs
         nsec_window = 10
         nsamples_window = int(fs.rescale('Hz').magnitude * nsec_window)
         mea_pos, mea_dim, mea_pitch = MEA.return_mea(electrode_name)
@@ -2210,14 +2270,15 @@ if __name__ == '__main__':
         n_sources = sources.shape[0]
         # lambda_val = 0.0001
         lambda_val = 0.995
+        lambda_val = 0.0078
 
-        orio = onlineORICAss(recordings, fs=fs, forgetfac='cooling', skew_thresh=0.8, lambda_0=lambda_val, verbose=True,
+        orio = onlineORICAss(recordings, fs=fs, forgetfac='constant', skew_thresh=0.8, lambda_0=lambda_val, verbose=True,
                              block=block, step_size=1, skew_window=5, detect_trheshold=10, onlineWhitening=False,
-                             calibratePCA=False,
-                             onlineDetection=False, numpass=1, pca_window=False)
+                             calibratePCA=False, ica_window=15, pca_window=0,
+                             onlineDetection=False, numpass=1)
 
-        ori = ORICA(recordings, onlineWhitening=False, forgetfac='cooling', pcaonly=False, lambda_0=lambda_val,
-                    verbose=True, numpass=1, block_white=block, block_ica=block)
+        # ori = ORICA(recordings, onlineWhitening=False, forgetfac='adaptive', pcaonly=False, lambda_0=lambda_val,
+        #             verbose=True, numpass=1, block_white=block, block_ica=block)
 
 
         print('ciao')

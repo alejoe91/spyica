@@ -114,10 +114,12 @@ class SpikeTrainGenerator:
                         st = stg.homogeneous_poisson_process(rate, self.t_add, self.t_stop)
                         while len(st) == 0:
                             st = stg.homogeneous_poisson_process(rate, self.t_add, self.t_stop)
+                        st.t_start = self.t_start
                     elif self.idx in self.idxs_remove:
                         st = stg.homogeneous_poisson_process(rate, self.t_start, self.t_remove)
                         while len(st) == 0:
                             st = stg.homogeneous_poisson_process(rate, self.t_start, self.t_remove)
+                        st.t_stop = self.t_stop
                     else:
                         st = stg.homogeneous_poisson_process(rate, self.t_start, self.t_stop)
                         while len(st) == 0:
@@ -136,10 +138,12 @@ class SpikeTrainGenerator:
                         st = stg.homogeneous_gamma_process(gamma_shape, rate, self.t_add, self.t_stop)
                         while len(st) == 0:
                             st = stg.homogeneous_gamma_process(gamma_shape, rate, self.t_add, self.t_stop)
+                        st.t_start = self.t_start
                     elif self.idx in self.idxs_remove:
                         st = stg.homogeneous_gamma_process(gamma_shape, rate, self.t_start, self.t_remove)
                         while len(st) == 0:
                             st = stg.homogeneous_gamma_process(gamma_shape, rate, self.t_start, self.t_remove)
+                        st.t_stop = self.t_stop
                     else:
                         st = stg.homogeneous_poisson_process(rate, self.t_start, self.t_stop)
                         while len(st) == 0:
@@ -162,10 +166,12 @@ class SpikeTrainGenerator:
                         st = stg.homogeneous_poisson_process(rate, self.t_add, self.t_stop)
                         while len(st) == 0:
                             st = stg.homogeneous_poisson_process(rate, self.t_add, self.t_stop)
+                        st.t_start = self.t_start
                     elif self.idx in self.idxs_remove:
                         st = stg.homogeneous_poisson_process(rate, self.t_start, self.t_remove)
                         while len(st) == 0:
                             st = stg.homogeneous_poisson_process(rate, self.t_start, self.t_remove)
+                        st.t_stop = self.t_stop
                     else:
                         st = stg.homogeneous_poisson_process(rate, self.t_start, self.t_stop)
                         while len(st) == 0:
@@ -184,10 +190,12 @@ class SpikeTrainGenerator:
                         st = stg.homogeneous_gamma_process(gamma_shape, rate, self.t_add, self.t_stop)
                         while len(st) == 0:
                             st = stg.homogeneous_gamma_process(gamma_shape, rate, self.t_add, self.t_stop)
+                        st.t_start = self.t_start
                     elif self.idxs in self.idxs_remove:
                         st = stg.homogeneous_gamma_process(gamma_shape, rate, self.t_start, self.t_remove)
                         while len(st) == 0:
                             st = stg.homogeneous_gamma_process(gamma_shape, rate, self.t_start, self.t_remove)
+                        st.t_stop = self.t_stop
                     else:
                         st = stg.homogeneous_poisson_process(rate, self.t_start, self.t_stop)
                         while len(st) == 0:

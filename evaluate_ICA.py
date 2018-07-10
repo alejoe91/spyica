@@ -291,8 +291,8 @@ if __name__ == '__main__':
                                                              n_sources)
 
         if plot_fig:
-            plot_mixing(sorted_mixing.T, mea_pos, mea_dim)
-            plot_mixing(sorted_a.T, mea_pos, mea_dim)
+            plot_mixing(sorted_mixing.T, mea_dim)
+            plot_mixing(sorted_a.T, mea_dim)
 
             # fig = plt.figure()
             # ax = fig.add_subplot(111)

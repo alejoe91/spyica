@@ -134,7 +134,7 @@ class GenST:
 
         idxs_cells = select_cells(init_loc, spikes, bin_cat, n_exc, n_inh, bound_x=self.bound_x, min_amp=self.min_amp,
                                   min_dist=self.min_dist, drift=True, drift_dir_ang=drift_dir_ang,
-                                  preferred_dir=preferred_dir, ang_tol=10)
+                                  preferred_dir=preferred_dir, ang_tol=15, verbose=True)
         drift_velocity_ums = drift_velocity / 60.
         vel_vector = drift_velocity_ums * np.array([np.cos(np.deg2rad(preferred_dir)),
                                                     np.sin(np.deg2rad(preferred_dir))])
@@ -186,7 +186,7 @@ class GenST:
                 # templates_spl.append(spl)
             templates_pad.append(templates_pad_p)
 
-        templates_pad = np.array(templates_pad)
+        self.templates_pad = np.array(templates_pad)
 
         # sampling jitter
         n_jitters = 5
@@ -423,22 +423,32 @@ class GenST:
             ax_pos.quiver(self.templates_loc_init[:, 1], self.templates_loc_init[:, 2],
                           self.templates_loc_final[:, 1] - self.templates_loc_init[:, 1],
                           self.templates_loc_final[:, 2] - self.templates_loc_init[:, 2])
-            ax_pos.set_xlim([np.min(self.mea_pos[:,1]), np.max(self.mea_pos[:,1])])
-            ax_pos.set_ylim([np.min(self.mea_pos[:,2]), np.max(self.mea_pos[:,2])])
+
+            xmin = np.min([self.templates_loc_init[:, 1], self.templates_loc_final[:, 1]])
+            xmax = np.max([self.templates_loc_init[:, 1], self.templates_loc_final[:, 1]])
+            ymin = np.min([self.templates_loc_init[:, 2], self.templates_loc_final[:, 2]])
+            ymax = np.max([self.templates_loc_init[:, 2], self.templates_loc_final[:, 2]])
+
+            ax_pos.set_xlim([xmin-20, xmax+20])
+            ax_pos.set_ylim([ymin-20, ymax+20])
 
         print 'Initial locations: ', self.templates_loc_init
         print 'Final locations: ', self.templates_loc_final
 
         # mixing matrices
         mixing_final = []
-        for i, tem in enumerate(self.templates):
+        templates_final = []
+        for i, tem in enumerate(self.templates_pad):
             dt = 2 ** -5
             temp_idx = np.where([np.array_equal(p, self.templates_loc_final[i]) for p in self.templates_loc[i]])
             print temp_idx
             # raise Exception()
-            feat = get_EAP_features(np.squeeze(tem[temp_idx, 0]), ['Na'], dt=dt)
+            feat = get_EAP_features(np.squeeze(tem[temp_idx]), ['Na'], dt=dt)
             mixing_final.append(-np.squeeze(feat['na']))
+            templates_final.append(tem[temp_idx])
         self.mixing_final = np.array(mixing_final)
+        self.templates_init = self.templates_pad[:, 0]
+        self.templates_final = np.squeeze(np.array(templates_final))
 
         print 'Elapsed time ', time.time() - t_start
 
@@ -543,7 +553,9 @@ class GenST:
 
         np.save(join(self.rec_path,'recordings'), self.recordings)
         np.save(join(self.rec_path,'spiketrains'), self.spgen.all_spiketrains)
-        np.save(join(self.rec_path,'templates'), self.templates)
+        np.save(join(self.rec_path,'templates'), self.templates_init)
+        np.save(join(self.rec_path,'templates_final'), self.templates_final)
+        np.save(join(self.rec_path,'sources'), self.gt_spikes)
         np.save(join(self.rec_path,'mixing'), self.mixing)
         np.save(join(self.rec_path,'mixing_final'), self.mixing_final)
         np.save(join(self.rec_path,'templates_loc'), self.templates_loc_init)
@@ -625,7 +637,7 @@ if __name__ == '__main__':
         pos = sys.argv.index('-bx')
         bx = sys.argv[pos + 1]
     else:
-        bx = [20,60]
+        bx = [10,60]
     if '-minamp' in sys.argv:
         pos = sys.argv.index('-minamp')
         minamp = sys.argv[pos+1]

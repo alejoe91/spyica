@@ -21,20 +21,6 @@ def load(filename):
     filen.close()
     return obj
 
-# def apply_pca(data):
-#     '''
-#     :param data: T x N numpy array where N is neurons and T time or trials
-#     :return: coeff, latent, projections
-#     '''
-
-#     pca = PCA(n_components=data.shape[1])
-#     pca.fit(data)
-
-#     coeff = pca.components_
-#     latent = pca.explained_variance_ratio_
-#     projections = np.dot(data, np.transpose(coeff))
-
-#     return coeff, latent, projections
 
 def apply_pca(X, n_comp):
     from sklearn.decomposition import PCA
@@ -372,7 +358,7 @@ def filter_analog_signals(anas, freq, fs, filter_type='bandpass', order=3, copy_
 
 
 def select_cells(loc, spikes, bin_cat, n_exc, n_inh, min_dist=25, bound_x=[], min_amp=None, drift=False,
-                 drift_dir_ang=[], preferred_dir=None, ang_tol=30):
+                 drift_dir_ang=[], preferred_dir=None, ang_tol=30, verbose=False):
     pos_sel = []
     idxs_sel = []
     exc_idxs = np.where(bin_cat == 'EXCIT')[0]
@@ -396,7 +382,8 @@ def select_cells(loc, spikes, bin_cat, n_exc, n_inh, min_dist=25, bound_x=[], mi
             iter += 1
 
             if np.any(dist < min_dist):
-                # print 'NOPE! ', dist
+                if verbose:
+                    print 'distance violation', dist, iter
                 pass
             else:
                 amp = np.max(np.abs(spikes[id_cell]))
@@ -407,12 +394,18 @@ def select_cells(loc, spikes, bin_cat, n_exc, n_inh, min_dist=25, bound_x=[], mi
                             pos_sel.append(loc[id_cell])
                             idxs_sel.append(id_cell)
                             n_sel += 1
+                        else:
+                            if verbose:
+                                print 'amp violation', amp, iter
                     else:
                         if loc[id_cell][0] > bound_x[0] and loc[id_cell][0] < bound_x[1] and amp > min_amp:
                             # save cell
                             pos_sel.append(loc[id_cell])
                             idxs_sel.append(id_cell)
                             n_sel += 1
+                        else:
+                            if verbose:
+                                print 'boundary violation', loc[id_cell], iter
                 else:
                     # drift
                     if len(bound_x) == 0:
@@ -422,6 +415,12 @@ def select_cells(loc, spikes, bin_cat, n_exc, n_inh, min_dist=25, bound_x=[], mi
                                 pos_sel.append(loc[id_cell])
                                 idxs_sel.append(id_cell)
                                 n_sel += 1
+                            else:
+                                if verbose:
+                                    print 'drift violation', loc[id_cell], iter
+                        else:
+                            if verbose:
+                                print 'amp violation', amp, iter
                     else:
                         if loc[id_cell][0] > bound_x[0] and loc[id_cell][0] < bound_x[1] and amp > min_amp:
                             # save cell
@@ -429,30 +428,68 @@ def select_cells(loc, spikes, bin_cat, n_exc, n_inh, min_dist=25, bound_x=[], mi
                                 pos_sel.append(loc[id_cell])
                                 idxs_sel.append(id_cell)
                                 n_sel += 1
+                            else:
+                                if verbose:
+                                    print 'drift violation', loc[id_cell], iter
+                        else:
+                            if verbose:
+                                print 'boundary violation', loc[id_cell], iter
     return idxs_sel
 
 
-def find_overlapping_spikes(spikes, thresh=0.7):
+def find_overlapping_spikes(spikes, thresh=0.7, parallel=True):
     overlapping_pairs = []
 
     for i in range(spikes.shape[0] - 1):
-        temp_1 = spikes[i]
-        max_ptp = (np.array([np.ptp(t) for t in temp_1]).max())
-        max_ptp_idx = (np.array([np.ptp(t) for t in temp_1]).argmax())
+        if parallel:
+            import multiprocessing
+            nprocesses = len(spikes)
+            # t_start = time.time()
+            pool = multiprocessing.Pool(nprocesses)
+            results = [pool.apply_async(overlapping(i, spikes,))
+                       for i, sp_times in enumerate(sst)]
+            overlapping_pairs = []
+            for result in results:
+                overlapping_pairs.extend(result.get())
+        else:
+            temp_1 = spikes[i]
+            max_ptp = (np.array([np.ptp(t) for t in temp_1]).max())
+            max_ptp_idx = (np.array([np.ptp(t) for t in temp_1]).argmax())
 
-        for j in range(i + 1, spikes.shape[0]):
-            temp_2 = spikes[j]
-            ptp_on_max = np.ptp(temp_2[max_ptp_idx])
+            for j in range(i + 1, spikes.shape[0]):
+                temp_2 = spikes[j]
+                ptp_on_max = np.ptp(temp_2[max_ptp_idx])
 
-            max_ptp_2 = (np.array([np.ptp(t) for t in temp_2]).max())
+                max_ptp_2 = (np.array([np.ptp(t) for t in temp_2]).max())
 
-            max_peak = np.max([ptp_on_max, max_ptp])
-            min_peak = np.min([ptp_on_max, max_ptp])
+                max_peak = np.max([ptp_on_max, max_ptp])
+                min_peak = np.min([ptp_on_max, max_ptp])
 
-            if min_peak > thresh * max_peak and ptp_on_max > thresh * max_ptp_2:
-                overlapping_pairs.append([i, j])  # , max_ptp_idx, max_ptp, ptp_on_max
+                if min_peak > thresh * max_peak and ptp_on_max > thresh * max_ptp_2:
+                    overlapping_pairs.append([i, j])  # , max_ptp_idx, max_ptp, ptp_on_max
 
     return np.array(overlapping_pairs)
+
+
+def overlapping(i, spikes):
+    overlapping_pairs = []
+    temp_1 = spikes[i]
+    max_ptp = (np.array([np.ptp(t) for t in temp_1]).max())
+    max_ptp_idx = (np.array([np.ptp(t) for t in temp_1]).argmax())
+
+    for j in range(i + 1, spikes.shape[0]):
+        temp_2 = spikes[j]
+        ptp_on_max = np.ptp(temp_2[max_ptp_idx])
+
+        max_ptp_2 = (np.array([np.ptp(t) for t in temp_2]).max())
+
+        max_peak = np.max([ptp_on_max, max_ptp])
+        min_peak = np.min([ptp_on_max, max_ptp])
+
+        if min_peak > thresh * max_peak and ptp_on_max > thresh * max_ptp_2:
+            overlapping_pairs.append([i, j])  # , max_ptp_idx, max_ptp, ptp_on_max
+
+    return overlapping_pairs
 
 
 def cubic_padding(spike, pad_len, fs, percent_mean=0.2):
@@ -743,7 +780,8 @@ def extract_wf(sst, recordings, times, fs, upsample=8, ica=False, sources=[]):
 
 
 
-def reject_duplicate_spiketrains(sst, percent_threshold=0.5, min_spikes=3, sources=None, parallel=True, nprocesses=None):
+def reject_duplicate_spiketrains(sst, percent_threshold=0.5, min_spikes=3, sources=None, parallel=False,
+                                 nprocesses=None):
     '''
 
     Parameters
@@ -761,9 +799,7 @@ def reject_duplicate_spiketrains(sst, percent_threshold=0.5, min_spikes=3, sourc
     import time
 
     if nprocesses is None:
-        num_cores = len(sst)
-    else:
-        num_cores = nprocesses
+        nprocesses = len(sst)
 
     spike_trains = []
     idx_sources = []
@@ -1237,34 +1273,6 @@ def cluster_spike_amplitudes(sst, metric='cal', min_sihlo=0.8, min_cal=100, max_
                                 reduced_sst.append(red_spikes)
                                 reduced_amps.append(amps[idxs])
                                 keep_id.append(idxs)
-                            # if keep_all:
-                            #     for clust in np.unique(labels):
-                            #         idxs = np.where(labels == clust)[0]
-                            #         red_spikes = copy(sst[i])
-                            #         red_spikes.annotations = copy(sst[i].annotations)
-                            #         if 'ica_amp' in red_spikes.annotations:
-                            #             red_spikes.annotate(ica_amp=red_spikes.annotations['ica_amp'])
-                            #         if 'ica_wf' in red_spikes.annotations:
-                            #             red_spikes.annotate(ica_wf=red_spikes.annotations['ica_wf'])
-                            #         red_spikes.annotate(ica_source=i)
-                            #         reduced_sst.append(red_spikes)
-                            #         reduced_amps.append(amps[idxs])
-                            #         keep_id.append(idxs)
-                            # else:
-                            #     if alg=='kmeans':
-                            #         highest_clust = np.argmin(kmeans.cluster_centers_)
-                            #     elif alg == 'mog':
-                            #         highest_clust = np.argmin(gmm.means_)
-                            #     highest_idx = np.where(labels==highest_clust)[0]
-                            #     red_spikes = sst[i][highest_idx].copy()
-                            #     if 'ica_amp' in red_spikes.annotations:
-                            #         red_spikes.annotate(ica_amp=red_spikes.annotations['ica_amp'])
-                            #     if 'ica_wf' in red_spikes.annotations:
-                            #         red_spikes.annotate(ica_wf=red_spikes.annotations['ica_wf'])
-                            #     red_spikes.annotate(ica_source=i)
-                            #     reduced_sst.append(red_spikes)
-                            #     reduced_amps.append(amps[highest_idx])
-                            #     keep_id.append(highest_idx)
                     silhos[i] = silho
                     cal_hars[i] = cal_har
                 else:
@@ -1734,6 +1742,7 @@ def confusion_matrix(gtst, sst, pairs, plot_fig=True, xlabel=None, ylabel=None):
 
     gtst_idxs = np.append(idxs_pairs_clean, idxs_pairs_dirty)
     sst_idxs = pairs_clean
+    sst_extra = []
 
     for gt_i, gt in enumerate(gtst_clean):
         if gt.annotations['paired']:
@@ -1752,8 +1761,12 @@ def confusion_matrix(gtst, sst, pairs, plot_fig=True, xlabel=None, ylabel=None):
         conf_matrix[gt_i+len(gtst_clean), -1] = int(fn)
     for st_i, st in enumerate(sst):
         fp = len(np.where('FP' == st.annotations['labels'])[0])
-        st_p = np.where(st_i == pairs_clean)
-        conf_matrix[-1, st_p] = fp
+        st_p = np.where(st_i == pairs_clean)[0]
+        if len(st_p) != 0:
+            conf_matrix[-1, st_p] = fp
+        else:
+            sst_extra.append(int(st_i))
+            conf_matrix[-1, len(pairs_clean) + len(sst_extra) - 1] = fp
 
     if plot_fig:
         fig, ax = plt.subplots()
@@ -1776,7 +1789,7 @@ def confusion_matrix(gtst, sst, pairs, plot_fig=True, xlabel=None, ylabel=None):
         ax.set_yticks(np.arange(0, len(gtst) + 1))
         ax.xaxis.tick_bottom()
         # Labels for major ticks
-        ax.set_xticklabels(np.append(sst_idxs, 'FN'), fontsize=12)
+        ax.set_xticklabels(np.append(np.append(sst_idxs, sst_extra).astype(int), 'FN'), fontsize=12)
         ax.set_yticklabels(np.append(gtst_idxs, 'FP'), fontsize=12)
 
         if xlabel==None:
@@ -1892,7 +1905,7 @@ def evaluate_sum_CC(ic_mix, gt_mix, ic_sources, gt_sources, n_sources): # ):
 
 
 
-def annotate_overlapping(gtst, t_jitt = 1*pq.ms, overlapping_pairs=None, verbose=False):
+def annotate_overlapping(gtst, t_jitt = 1*pq.ms, overlapping_pairs=None, verbose=False, parallel=True):
     '''
 
     Parameters
@@ -1906,38 +1919,76 @@ def annotate_overlapping(gtst, t_jitt = 1*pq.ms, overlapping_pairs=None, verbose
     -------
 
     '''
-    # find overlapping spikes
-    for i, st_i in enumerate(gtst):
-        if verbose:
-            print 'SPIKETRAIN ', i
-        over = np.array(['NO'] * len(st_i))
-        for i_sp, t_i in enumerate(st_i):
-            for j, st_j in enumerate(gtst):
-                if i != j:
-                    # find overlapping
-                    id_over = np.where((st_j > t_i - t_jitt) & (st_j < t_i + t_jitt))[0]
-                    if not np.any(overlapping_pairs):
-                        if len(id_over) != 0:
-                            over[i_sp] = 'O'
-                            # if verbose:
-                            #     print 'found overlap! spike 1: ', i, t_i, ' spike 2: ', j, st_j[id_over]
-                    else:
-                        pair = [i, j]
-                        pair_i = [j, i]
-                        if np.any([np.all(pair == p) for p in overlapping_pairs]) or \
-                                np.any([np.all(pair_i == p) for p in overlapping_pairs]):
-                            if len(id_over) != 0:
-                                over[i_sp] = 'SO'
-                                # if verbose:
-                                #     print 'found spatial overlap! spike 1: ', i, t_i, ' spike 2: ', j, st_j[id_over]
-                        else:
+    nprocesses = len(gtst)
+    if parallel:
+        import multiprocessing
+        # t_start = time.time()
+        pool = multiprocessing.Pool(nprocesses)
+        results = [pool.apply_async(annotate(i, st_i, gtst, overlapping_pairs, t_jitt, ))
+                   for i, st_i in enumerate(gtst)]
+    else:
+        # find overlapping spikes
+        for i, st_i in enumerate(gtst):
+            if verbose:
+                print 'SPIKETRAIN ', i
+            over = np.array(['NO'] * len(st_i))
+            for i_sp, t_i in enumerate(st_i):
+                for j, st_j in enumerate(gtst):
+                    if i != j:
+                        # find overlapping
+                        id_over = np.where((st_j > t_i - t_jitt) & (st_j < t_i + t_jitt))[0]
+                        if not np.any(overlapping_pairs):
                             if len(id_over) != 0:
                                 over[i_sp] = 'O'
                                 # if verbose:
                                 #     print 'found overlap! spike 1: ', i, t_i, ' spike 2: ', j, st_j[id_over]
-        st_i.annotate(overlap=over)
+                        else:
+                            pair = [i, j]
+                            pair_i = [j, i]
+                            if np.any([np.all(pair == p) for p in overlapping_pairs]) or \
+                                    np.any([np.all(pair_i == p) for p in overlapping_pairs]):
+                                if len(id_over) != 0:
+                                    over[i_sp] = 'SO'
+                                    # if verbose:
+                                    #     print 'found spatial overlap! spike 1: ', i, t_i, ' spike 2: ', j, st_j[id_over]
+                            else:
+                                if len(id_over) != 0:
+                                    over[i_sp] = 'O'
+                                    # if verbose:
+                                    #     print 'found overlap! spike 1: ', i, t_i, ' spike 2: ', j, st_j[id_over]
+            st_i.annotate(overlap=over)
 
-def raster_plots(st, bintype=False, ax=None, overlap=False, labels=False, color_st=None, fs=10,
+
+def annotate(i, st_i, gtst, overlapping_pairs, t_jitt):
+    print 'SPIKETRAIN ', i
+    over = np.array(['NO'] * len(st_i))
+    for i_sp, t_i in enumerate(st_i):
+        for j, st_j in enumerate(gtst):
+            if i != j:
+                # find overlapping
+                id_over = np.where((st_j > t_i - t_jitt) & (st_j < t_i + t_jitt))[0]
+                if not np.any(overlapping_pairs):
+                    if len(id_over) != 0:
+                        over[i_sp] = 'O'
+                        # if verbose:
+                        #     print 'found overlap! spike 1: ', i, t_i, ' spike 2: ', j, st_j[id_over]
+                else:
+                    pair = [i, j]
+                    pair_i = [j, i]
+                    if np.any([np.all(pair == p) for p in overlapping_pairs]) or \
+                            np.any([np.all(pair_i == p) for p in overlapping_pairs]):
+                        if len(id_over) != 0:
+                            over[i_sp] = 'SO'
+                            # if verbose:
+                            #     print 'found spatial overlap! spike 1: ', i, t_i, ' spike 2: ', j, st_j[id_over]
+                    else:
+                        if len(id_over) != 0:
+                            over[i_sp] = 'O'
+                            # if verbose:
+                            #     print 'found overlap! spike 1: ', i, t_i, ' spike 2: ', j, st_j[id_over]
+    st_i.annotate(overlap=over)
+
+def raster_plots(st, bintype=False, ax=None, overlap=False, labels=False, color_st=None, color=None, fs=10,
                  marker='|', mew=2, markersize=5):
     '''
 
@@ -1972,6 +2023,11 @@ def raster_plots(st, bintype=False, ax=None, overlap=False, labels=False, color_
                         ax.plot(t, i * np.ones_like(t), marker=marker, mew=mew, color=colors[idx], markersize=5, ls='')
                     else:
                         ax.plot(t, i * np.ones_like(t), 'k', marker=marker, mew=mew, markersize=markersize, ls='')
+                elif color is not None:
+                    if isinstance(color, list) or isinstance(color, np.ndarray):
+                        ax.plot(t, i * np.ones_like(t), color=color[i], marker=marker, mew=mew, markersize=markersize, ls='')
+                    else:
+                        ax.plot(t, i * np.ones_like(t), color=color, marker=marker, mew=mew, markersize=markersize, ls='')
                 else:
                     ax.plot(t, i * np.ones_like(t), 'k', marker=marker, mew=mew, markersize=markersize, ls='')
             elif overlap:
@@ -2360,7 +2416,7 @@ def unit_SNR(sst, sources, times):
         noise_source.append(s[t_idx.astype(int)])
         sd = np.std(noise_source[-1])
         mean_ic_amp = np.abs(np.mean(st.annotations['ica_amp']))
-        print t_idx[0]/32000., mean_ic_amp, sd
+        # print t_idx[0]/32000., mean_ic_amp, sd
         st.annotate(ica_snr=mean_ic_amp/sd)
 
     return np.array(noise_source)
@@ -2810,13 +2866,12 @@ def find_consistent_sorces(source_idx, thresh=0.5):
     return np.sort(consistent_sources)
 
 
-def plot_mixing(mixing, mea_pos, mea_dim, mea_name=None, gs=None, fig=None):
+def plot_mixing(mixing, mea_dim, mea_name=None, gs=None, fig=None):
     '''
 
     Parameters
     ----------
     mixing
-    mea_pos
     mea_dim
     mea_pitch
 
@@ -2852,36 +2907,34 @@ def plot_mixing(mixing, mea_pos, mea_dim, mea_name=None, gs=None, fig=None):
     return fig
 
 
-def play_mixing(mixing, mea_pos, mea_dim):
-    '''
-
-    Parameters
-    ----------
-    mixing
-    mea_pos
-    mea_dim
-    mea_pitch
-
-    Returns
-    -------
-
-    '''
-    from neuroplot import plot_weight
-
-    n_sources = len(mixing)
-    cols = int(np.ceil(np.sqrt(n_sources)))
-    rows = int(np.ceil(n_sources / float(cols)))
-    fig_t = plt.figure()
-
-    anim = []
-
-    for n in range(n_sources):
-        ax_w = fig_t.add_subplot(rows, cols, n+1)
-        mix = mixing[n]/np.ptp(mixing[n])
-        im = play_spike(mix, mea_dim, ax=ax_w, fig=fig_t)
-        anim.append(im)
-
-    return fig_t
+# def play_mixing(mixing, mea_dim):
+#     '''
+#
+#     Parameters
+#     ----------
+#     mixing
+#     mea_dim
+#
+#     Returns
+#     -------
+#
+#     '''
+#     from neuroplot import plot_weight
+#
+#     n_sources = len(mixing)
+#     cols = int(np.ceil(np.sqrt(n_sources)))
+#     rows = int(np.ceil(n_sources / float(cols)))
+#     fig_t = plt.figure()
+#
+#     anim = []
+#
+#     for n in range(n_sources):
+#         ax_w = fig_t.add_subplot(rows, cols, n+1)
+#         mix = mixing[n]/np.ptp(mixing[n])
+#         im = play_spike(mix, mea_dim, ax=ax_w, fig=fig_t)
+#         anim.append(im)
+#
+#     return fig_t
 
 
 def plot_templates(templates, mea_pos, mea_pitch, single_figure=True):
