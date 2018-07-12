@@ -14,7 +14,8 @@ from quantities import Quantity
 class SpikeTrainGenerator:
     def __init__(self, n_exc=70, n_inh=30, f_exc=10*pq.Hz, f_inh=40*pq.Hz, st_exc=2*pq.Hz, st_inh=5*pq.Hz,
                  process='poisson', gamma_shape=2.0, t_start=0*pq.s, t_stop=10*pq.s, ref_period=2*pq.ms, n_add=0,
-                 t_add=0, n_remove=0, t_remove=0):
+                 t_add=0, n_remove=0, t_remove=0, n_int=0, f_int=30*pq.Hz, t_int=5*pq.s, t_burst=1*pq.s,
+                 t_int_sd=5 * pq.s, t_burst_sd=1 * pq.s):
         '''
         Spike Train Generator: class to create poisson or gamma spike trains
 
@@ -55,22 +56,31 @@ class SpikeTrainGenerator:
         self.n_remove = n_remove
         self.t_add = int(t_add) * pq.s
         self.t_remove = int(t_remove) * pq.s
-        self.intermittent = False
+        self.changing = False
         self.idx = 0
+        self.n_int = n_int
+        self.t_int = t_int
+        self.t_burst = t_burst
+        self.t_int_sd = t_int
+        self.t_burst_sd = t_burst
+        self.f_int = f_int
+        self.intermittent = False
 
         if n_add != 0:
             if t_add == 0:
                 raise Exception('Provide time to add units')
             else:
-                self.intermittent = True
+                self.changing = True
         if n_remove != 0:
             if t_remove == 0:
                 raise Exception('Provide time to remove units')
             else:
-                self.intermittent = True
+                self.changing = True
+        if n_int != 0:
+            self.intermittent = True
 
 
-        if self.intermittent:
+        if self.changing:
             n_tot = n_exc + n_inh
             perm_idxs = np.random.permutation(np.arange(n_tot))
             self.idxs_add = perm_idxs[:self.n_add]
@@ -78,6 +88,13 @@ class SpikeTrainGenerator:
         else:
             self.idxs_add = []
             self.idxs_remove = []
+
+        if self.intermittent:
+            n_tot = n_exc + n_inh
+            perm_idxs = np.random.permutation(np.arange(n_tot))
+            self.idxs_int = perm_idxs[:self.n_int]
+        else:
+            self.idxs_int = []
 
     def set_spiketrain(self, idx, spiketrain):
         '''
@@ -109,7 +126,7 @@ class SpikeTrainGenerator:
                 rate = self.st_exc * np.random.randn() + self.f_exc
                 if rate < self.min_rate:
                     rate = self.min_rate
-                if self.intermittent:
+                if self.changing:
                     if self.idx in self.idxs_add:
                         st = stg.homogeneous_poisson_process(rate, self.t_add, self.t_stop)
                         while len(st) == 0:
@@ -128,12 +145,33 @@ class SpikeTrainGenerator:
                     st = stg.homogeneous_poisson_process(rate, self.t_start, self.t_stop)
                     while len(st) == 0:
                         st = stg.homogeneous_poisson_process(rate, self.t_start, self.t_stop)
+
+                if self.intermittent:
+                    if self.idx in self.idxs_int:
+                        rate = self.f_int
+                        st = stg.homogeneous_poisson_process(rate, self.t_start, self.t_stop)
+                        t_sp = [np.random.rand(1) *  self.t_int]
+                        spike = True
+                        keep_idx = []
+                        while t_sp[-1] < self.t_stop:
+                            if spike:
+                                t_sp.append(t_sp[-1] + self.t_burst
+                                            + np.random.uniform(-self.t_burst_sd, self.t_burst_sd) * pq.s)
+                                keep_ = np.where((st > t_sp[-2]) & (st < t_sp[-1]))
+                                if len(keep_[0]) != 0:
+                                    keep_idx.extend(list(keep_[0]))
+                                spike = False
+                            else:
+                                t_sp.append(t_sp[-1] + self.t_int
+                                            + np.random.uniform(-self.t_int_sd, self.t_int_sd)  * pq.s)
+                                spike = True
+                        st = st[keep_idx]
                 self.all_spiketrains.append(st)
             elif self.process == 'gamma':
                 rate = self.st_exc * np.random.randn() + self.f_exc
                 if rate < self.min_rate:
                     rate = self.min_rate
-                if self.intermittent:
+                if self.changing:
                     if self.idx in self.idxs_add:
                         st = stg.homogeneous_gamma_process(gamma_shape, rate, self.t_add, self.t_stop)
                         while len(st) == 0:
@@ -152,6 +190,26 @@ class SpikeTrainGenerator:
                     st = stg.homogeneous_gamma_process(gamma_shape, rate, self.t_start, self.t_stop)
                     while len(st) == 0:
                         st = stg.homogeneous_gamma_process(gamma_shape, rate, self.t_start, self.t_stop)
+                if self.intermittent:
+                    if self.idx in self.idxs_int:
+                        rate = self.f_int
+                        st = stg.homogeneous_gamma_process(gamma_shape, rate, self.t_start, self.t_stop)
+                        t_sp = [np.random.rand(1) *  self.t_int]
+                        spike = True
+                        keep_idx = []
+                        while t_sp[-1] < self.t_stop:
+                            if spike:
+                                t_sp.append(t_sp[-1] + self.t_burst
+                                            + np.random.uniform(-self.t_burst_sd, self.t_burst_sd) * pq.s)
+                                keep_ = np.where((st > t_sp[-2]) & (st < t_sp[-1]))
+                                if len(keep_[0]) != 0:
+                                    keep_idx.extend(list(keep_[0]))
+                                spike = False
+                            else:
+                                t_sp.append(t_sp[-1] + self.t_int
+                                            + np.random.uniform(-self.t_int_sd, self.t_int_sd) * pq.s)
+                                spike = True
+                        st = st[keep_idx]
                 self.all_spiketrains.append(st)
             self.all_spiketrains[-1].annotate(freq=rate)
             self.idx += 1
@@ -161,7 +219,7 @@ class SpikeTrainGenerator:
                 rate = self.st_inh * np.random.randn() + self.f_inh
                 if rate < self.min_rate:
                     rate = self.min_rate
-                if self.intermittent:
+                if self.changing:
                     if self.idx in self.idxs_add:
                         st = stg.homogeneous_poisson_process(rate, self.t_add, self.t_stop)
                         while len(st) == 0:
@@ -180,12 +238,32 @@ class SpikeTrainGenerator:
                     st = stg.homogeneous_poisson_process(rate, self.t_start, self.t_stop)
                     while len(st) == 0:
                         st = stg.homogeneous_poisson_process(rate, self.t_start, self.t_stop)
+                if self.intermittent:
+                    if self.idx in self.idxs_int:
+                        rate = self.f_int
+                        st = stg.homogeneous_poisson_process(rate, self.t_start, self.t_stop)
+                        t_sp = [np.random.rand(1) *  self.t_int]
+                        spike = True
+                        keep_idx = []
+                        while t_sp[-1] < self.t_stop:
+                            if spike:
+                                t_sp.append(t_sp[-1] + self.t_burst
+                                            + np.random.uniform(-self.t_burst_sd, self.t_burst_sd) * pq.s)
+                                keep_ = np.where((st > t_sp[-2]) & (st < t_sp[-1]))
+                                if len(keep_[0]) != 0:
+                                    keep_idx.extend(list(keep_[0]))
+                                spike = False
+                            else:
+                                t_sp.append(t_sp[-1] + self.t_int
+                                            + np.random.uniform(-self.t_int_sd, self.t_int_sd) * pq.s)
+                                spike = True
+                        st = st[keep_idx]
                 self.all_spiketrains.append(st)
             elif self.process == 'gamma':
                 rate = self.st_inh * np.random.randn() + self.f_inh
                 if rate < self.min_rate:
                     rate = self.min_rate
-                if self.intermittent:
+                if self.changing:
                     if self.idxs in self.idxs_add:
                         st = stg.homogeneous_gamma_process(gamma_shape, rate, self.t_add, self.t_stop)
                         while len(st) == 0:
@@ -204,6 +282,26 @@ class SpikeTrainGenerator:
                     st = stg.homogeneous_gamma_process(gamma_shape, rate, self.t_start, self.t_stop)
                     while len(st) == 0:
                         st = stg.homogeneous_gamma_process(gamma_shape, rate, self.t_start, self.t_stop)
+                if self.intermittent:
+                    if self.idx in self.idxs_int:
+                        rate = self.f_int
+                        st = stg.homogeneous_gamma_process(gamma_shape, rate, self.t_start, self.t_stop)
+                        t_sp = [np.random.rand(1) *  self.t_int]
+                        spike = True
+                        keep_idx = []
+                        while t_sp[-1] < self.t_stop:
+                            if spike:
+                                t_sp.append(t_sp[-1] + self.t_burst
+                                            + np.random.uniform(-self.t_burst_sd, self.t_burst_sd) * pq.s)
+                                keep_ = np.where((st > t_sp[-2]) & (st < t_sp[-1]) * pq.s)
+                                if len(keep_[0]) != 0:
+                                    keep_idx.extend(list(keep_[0]))
+                                spike = False
+                            else:
+                                t_sp.append(t_sp[-1] + self.t_int
+                                            + np.random.uniform(-self.t_int_sd, self.t_int_sd))
+                                spike = True
+                        st = st[keep_idx]
                 self.all_spiketrains.append(st)
             self.all_spiketrains[-1].annotate(freq=rate)
             self.idx += 1

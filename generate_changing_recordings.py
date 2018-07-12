@@ -492,9 +492,9 @@ class GenST:
                         + '_' + str(self.duration).replace(' ','') + '_' + self.noise_mode + '_' \
                         + str(self.noise_level) + '_' + str(self.f_exc).replace(' ','') + '_' \
                         + str(self.f_inh).replace(' ','') + '_modulation_' + self.spike_modulation \
-                        + '_' + time.strftime("%d-%m-%Y:%H:%M") + '_' + str(self.seed) + '_intermittent'
+                        + '_' + time.strftime("%d-%m-%Y:%H:%M") + '_' + str(self.seed) + '_changing'
 
-        rec_dir = join(root_folder, 'recordings', 'convolution', 'intermittent', self.electrode_name)
+        rec_dir = join(root_folder, 'recordings', 'convolution', 'changing', self.electrode_name)
         self.rec_path = join(rec_dir, self.rec_name)
         os.makedirs(self.rec_path)
         # Save meta_info yaml
@@ -513,7 +513,7 @@ class GenST:
                         'p_exc': round(self.p_exc,4), 'p_inh': round(self.p_inh, 4), 'n_cells': self.n_cells,
                         'bound_x': self.bound_x, 'min_amp': self.min_amp, 'min_dist': self.min_dist}
 
-            intermittent = {'n_add': str(self.n_add_cells), 'n_remove': str(self.n_add_cells),
+            changing = {'n_add': str(self.n_add_cells), 'n_remove': str(self.n_add_cells),
                             't_add': str(self.n_add_cells), 't_remove': str(self.n_add_cells),
                             'idx_add': str(self.spgen.idxs_add), 'idx_remove': str(self.spgen.idxs_remove)}
 
@@ -540,7 +540,7 @@ class GenST:
             data_yaml = {'General': general,
                          'Templates': templates,
                          'Spikegen': spikegen,
-                         'Intermittent': intermittent,
+                         'Changing': changing,
                          'Synchrony': synchrony,
                          'Modulation': modulation,
                          'Filter': filter,

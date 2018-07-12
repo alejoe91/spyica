@@ -42,8 +42,11 @@ if __name__ == '__main__':
         ff = sys.argv[pos + 1]
     else:
         ff = 'cooling'
+    if '-noplot' in sys.argv:
+        plot_fig = False
+    else:
+        plot_fig = True
 
-    plot_fig = False
     save_res = False
     save_perf = False
     paper_fig = False
@@ -76,36 +79,53 @@ if __name__ == '__main__':
 
     gtst = np.load(join(folder, 'spiketrains.npy'))
     templates = np.load(join(folder, 'templates.npy'))
+    template_loc = np.load(join(folder, 'templates_loc.npy'))
     mixing = np.load(join(folder, 'mixing.npy')).T
     sources = np.load(join(folder, 'sources.npy'))
+
+    if 'drifting' in folder:
+        drifting=True
+        mixing_ev = np.load(join(folder, 'mixing_ev.npy')).swapaxes(0,1)
+        template_loc_final = np.load(join(folder, 'templates_loc_final.npy'))
+    else:
+        drifting = False
+
     adj_graph = extract_adjacency(mea_pos, np.max(mea_pitch) + 5)
     n_sources = sources.shape[0]
     # lambda_val = 0.01
     if ff == 'cooling':
         lambda_val = 0.995
+        ffdecayrate = 0.6
+        min_lambda = 0
     elif ff == 'constant':
-        lambda_val = 0.0078
+        # lambda_val = 0.0078
+        lambda_val = 1e-4
+        min_lambda = 0
+        # lambda_val = 0.01
+    elif ff == 'coolant':
+        ff = 'cooling'
+        min_lambda = 1e-4
+        ffdecayrate = 0.6
+        lambda_val = 0.995
     else:
-        lambda_val = 0.1
+        min_lambda = 1e-4
+        ffdecayrate = 0.6
+        lambda_val = 0.995
 
-    # ff = 'cooling'
-    # ff = 'adaptive'
-    # ff = 'cooling'
-    ffdecayrate=0.5
 
     online = False
     detect = False
     calibPCA = False
 
     pca_window = 10
-    ica_window = 0
+    ica_window = 10
     skew_window = 5
     step = 1
 
     start_time = time.time()
     ori = orica.onlineORICAss(recordings, fs=fs, onlineWhitening=online, calibratePCA=calibPCA, forgetfac=ff,
-                              skew_thresh=0.5, ndim=ndim, lambda_0=lambda_val, verbose=True,
-                              numpass=1, block=block, step_size=step, ffdecayrate=ffdecayrate,
+                              skew_thresh=0.1, ndim=ndim, lambda_0=lambda_val, verbose=True,
+                              numpass=1, block=block, step_size=step, ffdecayrate=ffdecayrate, min_lambda=min_lambda,
                               skew_window=skew_window, pca_window=pca_window, ica_window=ica_window,
                               detect_trheshold=10, onlineDetection=False)
 
@@ -133,12 +153,13 @@ if __name__ == '__main__':
 
     correlation, idx_truth, idx_orica, _ = matcorr(mixing.T, a_selected_final)
     sorted_idx = idx_orica[idx_truth.argsort()]
+    sorted_idx_true = np.sort(idx_truth)
     sorted_corr_idx = idx_truth.argsort()
     sorted_a = np.matmul(np.diag(np.sign(correlation[sorted_corr_idx])), a_selected_final[sorted_idx]).T
-    sorted_mixing = mixing[:, np.sort(idx_truth)]
+    sorted_mixing = mixing[:, sorted_idx_true]
     sorted_y = np.matmul(np.diag(np.sign(correlation[sorted_corr_idx])), y_selected_final[sorted_idx])
     sorted_y_on = np.matmul(np.diag(np.sign(correlation[sorted_corr_idx])), y_on_selected_final[sorted_idx])
-    sorted_y_true = sources[np.sort(idx_truth)]
+    sorted_y_true = sources[sorted_idx_true]
 
     norm_y_true = sorted_y_true/np.max(np.abs(sorted_y_true), axis=1, keepdims=True)
     norm_y_on = sorted_y_on/np.max(np.abs(sorted_y_on), axis=1, keepdims=True)
@@ -157,10 +178,22 @@ if __name__ == '__main__':
     pairs = np.array([np.arange(len(idx_truth)), np.arange(len(idx_truth))]).T
     corr_time = np.zeros((len(ori.mixing), len(correlation)))
 
-    for i, mix in enumerate(ori.mixing):
-        a_selected = mix[last_idxs]
-        corr, idx_truth, idx_orica, _ = matcorr(mixing.T, a_selected)
-        corr_time[i] = np.abs(corr[sorted_corr_idx])
+    if drifting:
+        if len(mixing_ev) == len(ori.mixing):
+            for i, (mix_ev, mix) in enumerate(zip(mixing_ev, ori.mixing)):
+                a_selected = mix[last_idxs]
+                corr, idx_truth, idx_orica, _ = matcorr(mix_ev, a_selected)
+                corr_time[i] = np.abs(corr[sorted_corr_idx])
+        else:
+            for i, mix in enumerate(ori.mixing):
+                a_selected = mix[last_idxs]
+                corr, idx_truth, idx_orica, _ = matcorr(mixing.T, a_selected)
+                corr_time[i] = np.abs(corr[sorted_corr_idx])
+    else:
+        for i, mix in enumerate(ori.mixing):
+            a_selected = mix[last_idxs]
+            corr, idx_truth, idx_orica, _ = matcorr(mixing.T, a_selected)
+            corr_time[i] = np.abs(corr[sorted_corr_idx])
 
     if plot_fig:
         plt.matshow(corr_time.T)

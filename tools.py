@@ -2604,7 +2604,7 @@ def convolve_templates_spiketrains(spike_id, spike_bin, template, modulation=Fal
 
 
 def convolve_drifting_templates_spiketrains(spike_id, spike_bin, template, fs, loc, v_drift, t_start_drift,
-                                            modulation=False, amp_mod=None, recordings=[]):
+                                            modulation=False, amp_mod=None, recordings=[], n_step_sec=1):
     print 'START: convolution with spike ', spike_id
     if len(template.shape) == 4:
         njitt = template.shape[1]
@@ -2614,6 +2614,13 @@ def convolve_drifting_templates_spiketrains(spike_id, spike_bin, template, fs, l
         n_elec = template.shape[1]
         len_spike = template.shape[2]
     n_samples = len(spike_bin)
+    n_step_sec = 1
+    dur = (n_samples / fs).rescale('s').magnitude
+    t_steps = np.arange(0, dur, n_step_sec)
+    n_step_sample = n_step_sec * int(fs.magnitude)
+    dt = 2 ** -5
+
+    mixing = np.zeros((int(n_samples/float(fs.rescale('Hz').magnitude)), n_elec))
     if len(recordings) == 0:
         recordings = np.zeros((n_elec, n_samples))
 
@@ -2631,57 +2638,66 @@ def convolve_drifting_templates_spiketrains(spike_id, spike_bin, template, fs, l
                     print sp_time, 'No drift', loc[0]
                     temp_idx = 0
                     temp_jitt = template[temp_idx, rand_idx]
-                    if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
-                        recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += amp_mod[pos] * temp_jitt
-                    elif spos - len_spike // 2 < 0:
-                        diff = -(spos - len_spike // 2)
-                        recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * temp_jitt[:, diff:]
-                    else:
-                        diff = n_samples - (spos - len_spike // 2)
-                        recordings[:, spos - len_spike // 2:] += amp_mod[pos] * temp_jitt[:, :diff]
                 else:
                     # compute current position
                     new_pos = np.array(loc[0, 1:] + v_drift * (sp_time - t_start_drift).rescale('s').magnitude)
                     temp_idx = np.argmin([np.linalg.norm(p - new_pos) for p in loc[:, 1:]])
                     print sp_time, temp_idx, 'Drifting', new_pos, loc[temp_idx, 1:]
-                    new_temp_jitt = template[temp_idx, rand_idx]
-                    if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
-                        recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += amp_mod[pos] * new_temp_jitt
-                    elif spos - len_spike // 2 < 0:
-                        diff = -(spos - len_spike // 2)
-                        recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * new_temp_jitt[:, diff:]
-                    else:
-                        diff = n_samples - (spos - len_spike // 2)
-                        recordings[:, spos - len_spike // 2:] += amp_mod[pos] * new_temp_jitt[:, :diff]
+                    temp_jitt = template[temp_idx, rand_idx]
+
+                if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
+                    recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += amp_mod[pos] * temp_jitt
+                elif spos - len_spike // 2 < 0:
+                    diff = -(spos - len_spike // 2)
+                    recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * temp_jitt[:, diff:]
+                else:
+                    diff = n_samples - (spos - len_spike // 2)
+                    recordings[:, spos - len_spike // 2:] += amp_mod[pos] * temp_jitt[:, :diff]
+
+            for i, t in enumerate(t_steps):
+                if t < t_start_drift:
+                    temp_idx = 0
+                    temp_jitt = template[temp_idx, rand_idx]
+                else:
+                    # compute current position
+                    new_pos = np.array(loc[0, 1:] + v_drift * (t - t_start_drift.rescale('s').magnitude))
+                    temp_idx = np.argmin([np.linalg.norm(p - new_pos) for p in loc[:, 1:]])
+                    temp_jitt = template[temp_idx, rand_idx]
+
+                feat = get_EAP_features(np.squeeze(temp_jitt), ['Na'], dt=dt)
+                mixing[i] = -np.squeeze(feat['na'])
         else:
             print 'No jitter'
             for pos, spos in enumerate(spike_pos):
                 sp_time = spos / fs
                 if sp_time < t_start_drift:
                     temp_idx = 0
-                    if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
-                        recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += amp_mod[pos] \
-                                                                                                  * template[temp_idx]
-                    elif spos - len_spike // 2 < 0:
-                        diff = -(spos - len_spike // 2)
-                        recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * template[temp_idx, :, diff:]
-                    else:
-                        diff = n_samples - (spos - len_spike // 2)
-                        recordings[:, spos - len_spike // 2:] += amp_mod[pos] * template[temp_idx, :, :diff]
+                    temp = template[temp_idx]
                 else:
                     # compute current position
                     new_pos = np.array(loc[0, 1:] + v_drift * (sp_time - t_start_drift).rescale('s').magnitude)
                     temp_idx = np.argmin([np.linalg.norm(p - new_pos) for p in loc[:, 1:]])
-                    new_template = template[temp_idx]
-                    if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
-                        recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += amp_mod[
-                                                                                                      pos] * new_template
-                    elif spos - len_spike // 2 < 0:
-                        diff = -(spos - len_spike // 2)
-                        recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * new_template[:, diff:]
-                    else:
-                        diff = n_samples - (spos - len_spike // 2)
-                        recordings[:, spos - len_spike // 2:] += amp_mod[pos] * new_template[:, :diff]
+                    temp = template[temp_idx]
+                if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
+                    recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += amp_mod[pos] * temp
+                elif spos - len_spike // 2 < 0:
+                    diff = -(spos - len_spike // 2)
+                    recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * temp[:, diff:]
+                else:
+                    diff = n_samples - (spos - len_spike // 2)
+                    recordings[:, spos - len_spike // 2:] += amp_mod[pos] * temp[:, :diff]
+            for i, t in enumerate(t_steps):
+                if t < t_start_drift:
+                    temp_idx = 0
+                    temp_jitt = template[temp_idx]
+                else:
+                    # compute current position
+                    new_pos = np.array(loc[0, 1:] + v_drift * (t - t_start_drift.rescale('s').magnitude))
+                    temp_idx = np.argmin([np.linalg.norm(p - new_pos) for p in loc[:, 1:]])
+                    temp_jitt = template[temp_idx]
+
+                feat = get_EAP_features(np.squeeze(temp_jitt), ['Na'], dt=dt)
+                mixing[i] = -np.squeeze(feat['na'])
     else:
         assert amp_mod is not None
         spike_pos = np.where(spike_bin == 1)[0]
@@ -2696,30 +2712,21 @@ def convolve_drifting_templates_spiketrains(spike_id, spike_bin, template, fs, l
                         print sp_time, 'No drift', loc[0]
                         temp_idx = 0
                         temp_jitt = template[temp_idx, rand_idx]
-                        if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
-                            recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += amp_mod[pos] \
-                                                                                                      * temp_jitt
-                        elif spos - len_spike // 2 < 0:
-                            diff = -(spos - len_spike // 2)
-                            recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * temp_jitt[:, diff:]
-                        else:
-                            diff = n_samples - (spos - len_spike // 2)
-                            recordings[:, spos - len_spike // 2:] += amp_mod[pos] * temp_jitt[:, :diff]
                     else:
                         # compute current position
                         new_pos = np.array(loc[0, 1:] + v_drift * (sp_time - t_start_drift).rescale('s').magnitude)
                         temp_idx = np.argmin([np.linalg.norm(p - new_pos) for p in loc[:, 1:]])
-                        new_temp_jitt = template[temp_idx, rand_idx]
+                        temp_jitt = template[temp_idx, rand_idx]
                         print sp_time, temp_idx, 'Drifting', new_pos, loc[temp_idx, 1:]
-                        if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
-                            recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += amp_mod[pos] \
-                                                                                                      * new_temp_jitt
-                        elif spos - len_spike // 2 < 0:
-                            diff = -(spos - len_spike // 2)
-                            recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * new_temp_jitt[:, diff:]
-                        else:
-                            diff = n_samples - (spos - len_spike // 2)
-                            recordings[:, spos - len_spike // 2:] += amp_mod[pos] * new_temp_jitt[:, :diff]
+                    if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
+                        recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += amp_mod[pos] \
+                                                                                                  * temp_jitt
+                    elif spos - len_spike // 2 < 0:
+                        diff = -(spos - len_spike // 2)
+                        recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * temp_jitt[:, diff:]
+                    else:
+                        diff = n_samples - (spos - len_spike // 2)
+                        recordings[:, spos - len_spike // 2:] += amp_mod[pos] * temp_jitt[:, :diff]
             else:
                 print 'Electrode modulation'
                 for pos, spos in enumerate(spike_pos):
@@ -2758,6 +2765,18 @@ def convolve_drifting_templates_spiketrains(spike_id, spike_bin, template, fs, l
                             diff = n_samples - (spos - len_spike // 2)
                             recordings[:, spos - len_spike // 2:] += \
                                 [a * t for (a, t) in zip(amp_mod[pos], new_temp_jitt[:, :diff])]
+                for i, t in enumerate(t_steps):
+                    if t < t_start_drift:
+                        temp_idx = 0
+                        temp_jitt = template[temp_idx, rand_idx]
+                    else:
+                        # compute current position
+                        new_pos = np.array(loc[0, 1:] + v_drift * (t - t_start_drift.rescale('s').magnitude))
+                        temp_idx = np.argmin([np.linalg.norm(p - new_pos) for p in loc[:, 1:]])
+                        temp_jitt = template[temp_idx, rand_idx]
+
+                    feat = get_EAP_features(np.squeeze(temp_jitt), ['Na'], dt=dt)
+                    mixing[i] = -np.squeeze(feat['na'])
         else:
             print 'No jitter'
             if not isinstance(amp_mod[0], (list, tuple, np.ndarray)):
@@ -2767,29 +2786,19 @@ def convolve_drifting_templates_spiketrains(spike_id, spike_bin, template, fs, l
                     if sp_time < t_start_drift:
                         temp_idx = 0
                         temp = template[temp_idx]
-                        if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
-                            recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += amp_mod[pos] \
-                                                                                                      * temp
-                        elif spos - len_spike // 2 < 0:
-                            diff = -(spos - len_spike // 2)
-                            recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * temp[:, diff:]
-                        else:
-                            diff = n_samples - (spos - len_spike // 2)
-                            recordings[:, spos - len_spike // 2:] += amp_mod[pos] * temp[:, :diff]
                     else:
                         # compute current position
                         new_pos = np.array(pos[0, 1:] + v * (sp_time - t_start_drift))
                         temp_idx = np.argmin([np.linalg.norm(p - new_pos) for p in loc[:, 1:]])
-                        new_template = template[temp_idx]
-                        if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
-                            recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += amp_mod[
-                                                                                                          pos] * new_template
-                        elif spos - len_spike // 2 < 0:
-                            diff = -(spos - len_spike // 2)
-                            recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * new_template[:, diff:]
-                        else:
-                            diff = n_samples - (spos - len_spike // 2)
-                            recordings[:, spos - len_spike // 2:] += amp_mod[pos] * new_template[:, :diff]
+                        temp = template[temp_idx]
+                    if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
+                        recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += amp_mod[pos] * temp
+                    elif spos - len_spike // 2 < 0:
+                        diff = -(spos - len_spike // 2)
+                        recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * temp[:, diff:]
+                    else:
+                        diff = n_samples - (spos - len_spike // 2)
+                        recordings[:, spos - len_spike // 2:] += amp_mod[pos] * temp[:, :diff]
 
             else:
                 print 'Electrode modulation'
@@ -2798,40 +2807,38 @@ def convolve_drifting_templates_spiketrains(spike_id, spike_bin, template, fs, l
                     if sp_time < t_start_drift:
                         temp_idx = 0
                         temp = template[temp_idx]
-                        if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
-                            recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += \
-                                [a * t for (a, t) in zip(amp_mod[pos], temp)]
-                        elif spos - len_spike // 2 < 0:
-                            diff = -(spos - len_spike // 2)
-                            recordings[:, :spos - len_spike // 2 + len_spike] += \
-                                [a * t for (a, t) in zip(amp_mod[pos], temp[:, diff:])]
-                            # recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * template[:, diff:]
-                        else:
-                            diff = n_samples - (spos - len_spike // 2)
-                            recordings[:, spos - len_spike // 2:] += \
-                                [a * t for (a, t) in zip(amp_mod[pos], temp[:, :diff])]
                     else:
                         # compute current position
                         new_pos = np.array(pos[0, 1:] + v * (sp_time - t_start_drift))
                         temp_idx = np.argmin([np.linalg.norm(p - new_pos) for p in loc[:, 1:]])
-                        new_template = template[temp_idx]
-                        if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
-                            recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += \
-                                [a * t for (a, t) in zip(amp_mod[pos], new_template)]
-                        elif spos - len_spike // 2 < 0:
-                            diff = -(spos - len_spike // 2)
-                            recordings[:, :spos - len_spike // 2 + len_spike] += \
-                                [a * t for (a, t) in zip(amp_mod[pos], new_template[:, diff:])]
-                            # recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * template[:, diff:]
-                        else:
-                            diff = n_samples - (spos - len_spike // 2)
-                            recordings[:, spos - len_spike // 2:] += \
-                                [a * t for (a, t) in zip(amp_mod[pos], new_template[:, :diff])]
+                        temp = template[temp_idx]
+                    if spos - len_spike // 2 >= 0 and spos - len_spike // 2 + len_spike <= n_samples:
+                        recordings[:, spos - len_spike // 2:spos - len_spike // 2 + len_spike] += \
+                            [a * t for (a, t) in zip(amp_mod[pos], temp)]
+                    elif spos - len_spike // 2 < 0:
+                        diff = -(spos - len_spike // 2)
+                        recordings[:, :spos - len_spike // 2 + len_spike] += \
+                            [a * t for (a, t) in zip(amp_mod[pos], temp[:, diff:])]
+                        # recordings[:, :spos - len_spike // 2 + len_spike] += amp_mod[pos] * template[:, diff:]
+                    else:
+                        diff = n_samples - (spos - len_spike // 2)
+                        recordings[:, spos - len_spike // 2:] += \
+                            [a * t for (a, t) in zip(amp_mod[pos], temp[:, :diff])]
+
+            for i, t in enumerate(t_steps):
+                if t < t_start_drift:
+                    temp_idx = 0
+                    temp_jitt = template[temp_idx]
+                else:
+                    # compute current position
+                    new_pos = np.array(loc[0, 1:] + v_drift * (t - t_start_drift.rescale('s').magnitude))
+                    temp_idx = np.argmin([np.linalg.norm(p - new_pos) for p in loc[:, 1:]])
+                    temp_jitt = template[temp_idx]
 
     final_pos = loc[temp_idx]
     print 'DONE: convolution with spike ', spike_id
 
-    return recordings, final_pos
+    return recordings, final_pos, mixing
 
 
 
@@ -2986,10 +2993,10 @@ def templates_weights(templates, weights, mea_pos, mea_dim, mea_pitch, pairs=Non
     ----------
     templates
     weights
-    pairs
     mea_pos
     mea_dim
     mea_pitch
+    pairs: (optional)
 
     Returns
     -------
@@ -3067,6 +3074,237 @@ def plot_matched_raster(gtst, sst, pairs):
 
     fig.tight_layout()
     return ax1, ax2
+
+def play_mixing(mixing, mea_dim, time=None, save=False, ax=None, fig=None, file=None, origin='lower'):
+    '''
+
+    Parameters
+    ----------
+    mixing: Nframes x Nchannels
+    mea_dim
+    time
+    save
+    ax
+    fig
+    file
+
+    Returns
+    -------
+
+    '''
+    #  check if number of mixing is 1
+    if len(mixing.shape) == 3:
+        print 'Plot one mixing at a time!'
+        return
+    else:
+        if time:
+            inter = time
+        else:
+            inter = 20
+
+    # if save:
+    #     plt.switch_backend('agg')
+    # else:
+    #     plt.switch_backend('qt4agg')
+    if fig is None:
+        fig = plt.figure()
+    if ax is None:
+        ax = fig.add_subplot(111)
+    ax.axis('off')
+    z_min = np.min(mixing)
+    z_max = np.max(mixing)
+
+    im0 = ax.imshow(np.zeros((mea_dim[0], mea_dim[1])), vmin=z_min, vmax=z_max, origin=origin)
+    if ax is None:
+        fig.colorbar(im0)
+    ims = []
+
+    if (mea_dim[0] * mea_dim[1]) == mixing.shape[1]:
+        for t in range(mixing.shape[0]):
+            ims.append([ax.imshow(mixing[t, :].reshape(mea_dim).T,
+                                   vmin=z_min, vmax=z_max, origin=origin)])
+
+    im_ani = animation.ArtistAnimation(fig, ims, interval=inter, repeat_delay=2500, blit=True)
+
+    if save:
+        plt.switch_backend('agg')
+        mywriter = animation.FFMpegWriter(fps=60)
+        if file:
+            im_ani.save(file, writer=mywriter)
+        else:
+            im_ani.save('mixing.mp4', writer=mywriter)
+
+    return im_ani
+
+
+def play_mea_recording(rec, mea_pos, mea_pitch, fs, window=1, step=0.1, colors=None, lw=1, ax=None, fig=None, spacing=None,
+                       scalebar=False, time=None, dt=None, vscale=None, spikes=None, repeat=False, interval=10):
+    '''
+
+    Parameters
+    ----------
+    rec
+    mea_pos
+    mea_pitch
+    fs
+    window
+    step
+    colors
+    lw
+    ax
+    spacing
+    scalebar
+    time
+    dt
+    vscale
+
+    Returns
+    -------
+
+    '''
+    n_window = int(fs*window)
+    n_step = int(fs*step)
+    start = np.arange(0, rec.shape[1], n_step)
+
+    if fig is None:
+        fig = plt.figure()
+    if ax is None:
+        ax = fig.add_subplot(1,1,1, frameon=False)
+        no_tight = False
+    else:
+        no_tight = True
+
+    if spacing is None:
+        spacing = 0.1*np.max(mea_pitch)
+
+    # normalize to min peak
+    if vscale is None:
+        LFPmin = 1.5 * np.max(np.abs(rec))
+        rec_norm = rec / LFPmin * mea_pitch[1]
+    else:
+        rec_norm = rec / float(vscale) * mea_pitch[1]
+
+    if colors is None:
+        if len(rec.shape) > 2:
+            colors = plt.rcParams['axes.color_cycle']
+        else:
+            colors='k'
+
+    number_electrode = mea_pos.shape[0]
+    lines = []
+    for el in range(number_electrode):
+        if len(rec.shape) == 3:  # multiple
+            raise Exception('Dimensions should be Nchannels x Nsamples')
+        else:
+            line, = ax.plot(np.linspace(0, mea_pitch[0] - spacing, n_window) + mea_pos[el, 1],
+                            np.zeros(n_window) + mea_pos[el, 2], color=colors, lw=lw)
+            lines.append(line)
+
+    text = ax.text(0.7, 0, 'Time: ',
+                   color='k', fontsize=15, transform=ax.transAxes)
+
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.axis('off')
+
+    def update(i):
+        if n_window + i < rec.shape[1]:
+            for el in range(number_electrode):
+                lines[el].set_ydata(rec_norm[el, i:n_window + i] + mea_pos[el, 2])
+        else:
+            for el in range(number_electrode):
+                lines[el].set_ydata(np.pad(rec_norm[el, i:],
+                                           (0, n_window - (rec.shape[1] - i)), 'constant') + mea_pos[el, 2])
+
+        text.set_text('Time: ' + str(round(i/float(fs),1)) + ' s')
+
+        return tuple(lines) + (text,)
+
+    anim = animation.FuncAnimation(fig, update, start, interval=interval, blit=True, repeat=False)
+    fig.tight_layout()
+
+    return anim
+
+
+def play_ica_spiking(mixing, source_idx, mea_dim, gs=None, interval=100, ax=None, fig=None, tstep=None, origin='lower'):
+    '''
+
+    Parameters
+    ----------
+    mixing
+    source_idx
+    mea_dim
+    fs
+    interval
+    ax
+    fig
+
+    Returns
+    -------
+
+    '''
+
+    steps = np.arange(len(mixing))
+
+    if fig is None and gs is None:
+        fig = plt.figure()
+    # if ax is None:
+    #     ax = fig.add_subplot(1,1,1, frameon=False)
+    #     no_tight = False
+    else:
+        no_tight = True
+
+
+    n_sources = mixing[0].shape[0]
+    cols = int(np.ceil(np.sqrt(n_sources)))
+    rows = int(np.ceil(n_sources / float(cols)))
+
+    if gs is not None:
+        from matplotlib import gridspec
+        gs_plot = gridspec.GridSpecFromSubplotSpec(rows, cols, subplot_spec=gs)
+
+    images = []
+    for ss in range(n_sources):
+        if gs is None:
+            ax = fig.add_subplot(rows, cols, ss+1)
+        else:
+            ax = fig.add_subplot(gs_plot[ss])
+        ax.axis('off')
+        im = ax.imshow(np.zeros(mea_dim).T, animated=True, vmin=np.min(mixing[:, ss]), vmax=np.max(mixing[:, ss]),
+                       origin=origin)
+        im.set_visible(False)
+        images.append(im)
+
+    if tstep is not None:
+        # text = fig.suptitle('', color='k', fontsize=15)
+        text = ax.text(0, 0, '', color='k', fontsize=15, transform=ax.transAxes)
+    else:
+        text = fig.suptitle('')
+
+    def update(i, n, images):
+        im = images[n]
+        if n in source_idx[i]:
+            im.set_array(mixing[i, n].reshape(mea_dim).T)
+            im.set_visible(True)
+        else:
+            im.set_visible(False)
+        return im,
+
+    def updateText(i):
+        if tstep is not None:
+            # text = fig.suptitle('Time: ' + str(round(i * tstep, 1)) + ' s')
+            text.set_text(str(round(i * tstep, 1)) + ' s')
+        return text,
+
+    anim = []
+    for n in range(n_sources):
+        anim.append(animation.FuncAnimation(fig, update, steps, fargs=[n, images], interval=interval, blit=True))
+    anim.append(animation.FuncAnimation(fig, updateText, steps, interval=interval, blit=False))
+
+    print len(anim)
+
+    return anim
+
 
 
 

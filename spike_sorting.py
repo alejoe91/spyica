@@ -19,7 +19,7 @@ import ipdb
 from tools import *
 from neuroplot import *
 import ICA as ica
-import smoothICA as sICA
+# import smoothICA as sICA
 import orICA
 
 root_folder = os.getcwd()
@@ -1893,9 +1893,11 @@ if __name__ == '__main__':
         keepall=True
 
     if len(sys.argv) == 1 and not debug:
-        print 'Arguments: \n   -r recording filename\n   -mod ICA - cICA - orica - corica - oricaonline - threshonline - klusta' \
-              'kilosort - mountainsort - spykingcircus  -yass\n   -dur duration in s\n   -tstart start time in s\n' \
-              '   -tstop stop time in s\n   -M   number of dimensions'
+        print 'Arguments: \n   -r recording filename\n   -mod ICA - orica - oricaonline - threshonline - klusta' \
+              '- kilosort - mountainsort - spykingcircus  -yass\n   -dur duration in s\n   -tstart start time in s\n' \
+              '   -tstop stop time in s\n   -M   number of dimensions\n   -thresh threshold for spike detection\n' \
+              '   -block ORICA block size\n   -feat amp|pca feature to use for clustering\n   -clust mog|kmeans ' \
+              'clustering algorithm\n   -nokeep only keep largest cluster'
 
     elif '-r' not in sys.argv and not debug:
         raise AttributeError('Provide model folder for data')
