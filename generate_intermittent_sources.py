@@ -25,7 +25,7 @@ root_folder = os.getcwd()
 #TODO implement intermittent units: 'bursts' of activity only in certain intervals
 class GenST:
     def __init__(self, save=False, spike_folder=None, fs=None, noise_mode=None, n_cells=None, n_int_cells=0,
-                 f_int=None, t_int=None, t_int_sd=3*pq.s, t_burst=None, t_burst_sd=1*pq.s, p_exc=None,
+                 f_int=None, t_int=None, t_int_sd=2*pq.s, t_burst=None, t_burst_sd=0.5*pq.s, p_exc=None,
                  bound_x=[], min_amp=None, noise_level=None, duration=None, f_exc=None, f_inh=None,
                  filter=True, over=None, sync=None, modulation='none', min_dist=None, plot_figures=True,
                  seed=2904):
@@ -58,7 +58,6 @@ class GenST:
         np.random.seed(seed)
         self.chunk_duration = 0 * pq.s
         self.noise_chunk_duration = 2 * pq.s
-
 
         self.spike_folder = spike_folder
         self.fs = float(fs) * pq.kHz

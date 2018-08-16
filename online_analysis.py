@@ -118,7 +118,7 @@ if __name__ == '__main__':
     calibPCA = False
 
     pca_window = 10
-    ica_window = 10
+    ica_window = 0
     skew_window = 5
     step = 1
 
@@ -194,6 +194,16 @@ if __name__ == '__main__':
             a_selected = mix[last_idxs]
             corr, idx_truth, idx_orica, _ = matcorr(mixing.T, a_selected)
             corr_time[i] = np.abs(corr[sorted_corr_idx])
+
+    print('Correlations over time')
+    corr_source_time = np.zeros((len(sorted_y), len(ori.unmixing)))
+    for i, unmix in enumerate(ori.unmixing):
+        print('Time ', i)
+        s_on = np.matmul(unmix, recordings)[last_idxs][sorted_idx]
+        for i_s, s in enumerate(sorted_y_true):
+            corr_source_time[i_s, i] = np.abs(np.corrcoef(s_on[i_s], s)[0,1])
+
+
 
     if plot_fig:
         plt.matshow(corr_time.T)
