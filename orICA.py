@@ -172,7 +172,8 @@ class ORICA():
                         icasphere = sphere
                     elif white_mode == 'zca':
                         print('ZCA whitening')
-                        icasphere = 2. * la.inv(sqrtm(np.cov(data)))
+                        # TODO use SVD and compute ZCA VS PCA
+                        icasphere = la.inv(sqrtm(np.cov(data)))
                         data_w = np.matmul(icasphere, data)
                 else:
                     # data_w = np.matmul(icasphere, data)
@@ -359,7 +360,7 @@ class ORICA():
                                                     self.adaptiveFF['lambda_0'])
             if self.lambda_k[0] < self.adaptiveFF['lambda_const']:
                 self.lambda_k = np.squeeze(np.tile(self.adaptiveFF['lambda_const'], (1, nPts)))
-            self.counter = self.counter + nPts;
+            self.counter = self.counter + nPts
         elif self.adaptiveFF['profile'] == 'constant':
             self.lambda_k = np.arange(nPts) * self.adaptiveFF['lambda_0']
         elif self.adaptiveFF['profile'] == 'adaptive':

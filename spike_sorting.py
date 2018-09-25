@@ -59,7 +59,7 @@ class SpikeSorter:
             split = os.path.split(rec_folder)[0]
             self.rec_name = os.path.split(split)[-1]
 
-        print self.rec_name
+        print(self.rec_name)
 
         self.iterations = 2
 
@@ -91,7 +91,7 @@ class SpikeSorter:
         self.minimum_spikes_per_cluster = 15
 
         if 'exp' in self.rec_folder:
-            self.recordings = np.load(join(self.rec_folder, 'recordings.npy')).astype('int16')
+            self.recordings = np.load(join(self.rec_folder, 'recordings.npy')) #.astype('int16')
             rec_info = [f for f in os.listdir(self.rec_folder) if '.yaml' in f or '.yml' in f][0]
             with open(join(self.rec_folder, rec_info), 'r') as f:
                 self.info = yaml.load(f)
@@ -107,12 +107,13 @@ class SpikeSorter:
 
             # self.overlapping = self.info['Synchrony']['overlap_pairs']
             # if 'overlap' not in self.gtst[0].annotations.keys():
-            #     print 'Finding overlapping spikes'
+            #     print('Finding overlapping spikes'
             #     annotate_overlapping(self.gtst, overlapping_pairs=self.overlapping)
 
             # load MEA info
             elinfo = MEA.return_mea_info(self.electrode_name)
-            self.mea_pos, self.mea_dim, self.mea_pitch = MEA.return_mea(self.electrode_name, sortlist=None)
+            self.mea = MEA.return_mea(self.electrode_name, sortlist=None)
+            self.mea_pos = self.mea.positions
             mea_shape = elinfo['shape']
 
             self.t_start = 0 * pq.s
@@ -125,7 +126,7 @@ class SpikeSorter:
 
         elif self.rec_name.startswith('recording'):
             self.gtst = np.load(join(self.rec_folder, 'spiketrains.npy'))
-            self.recordings = np.load(join(self.rec_folder, 'recordings.npy')).astype('int16')
+            self.recordings = np.load(join(self.rec_folder, 'recordings.npy')) #.astype('int16')
             self.templates = np.load(join(self.rec_folder, 'templates.npy'))
             self.templates_cat = np.load(join(self.rec_folder, 'templates_cat.npy'))
             self.templates_loc = np.load(join(self.rec_folder, 'templates_loc.npy'))
@@ -144,15 +145,13 @@ class SpikeSorter:
             self.times = (range(self.recordings.shape[1]) / self.fs).rescale('s')
             self.overlapping = self.info['Synchrony']['overlap_pairs']
             # if 'overlap' not in self.gtst[0].annotations.keys():
-            #     print 'Finding overlapping spikes'
+            #     print('Finding overlapping spikes'
             #     annotate_overlapping(self.gtst, overlapping_pairs=self.overlapping)
 
             # load MEA info
             elinfo = MEA.return_mea_info(self.electrode_name)
-            x_plane = 0.
-            self.mea_pos = MEA.get_elcoords(x_plane, **elinfo)
-            self.mea_pitch = elinfo['pitch']
-            self.mea_dim = elinfo['dim']
+            self.mea = MEA.return_mea(self.electrode_name)
+            self.mea_pos = self.mea.positions
             mea_shape = elinfo['shape']
 
             self.t_start = 0 * pq.s
@@ -178,8 +177,6 @@ class SpikeSorter:
                 mea_pos.append([y, x, z])
 
             self.mea_pos = np.array(mea_pos)
-            self.mea_dim = [2, 15]
-            self.mea_pitch = [22., 22.]
 
             # read gtst
             with open(join(self.rec_folder, 'ViSAPy_ground_truth.gdf')) as f:
@@ -290,7 +287,7 @@ class SpikeSorter:
 
         if self.ica:
             if self.run_ss:
-                print 'Applying instantaneous ICA'
+                print('Applying instantaneous ICA')
                 t_start = time.time()
                 t_start_proc = time.time()
 
@@ -302,7 +299,7 @@ class SpikeSorter:
                 n_chunks = 1
                 self.s_ica, self.A_ica, self.W_ica = ica.instICA(self.recordings, n_comp=self.ndim,
                                                                  n_chunks=n_chunks, chunk_size=chunk_size)
-                print 'ICA Finished. Elapsed time: ', time.time() - t_start, ' sec.'
+                print('ICA Finished. Elapsed time: ', time.time() - t_start, ' sec.')
 
                 # clean sources based on skewness and correlation
                 spike_sources, self.source_idx = clean_sources(self.s_ica, kurt_thresh=self.kurt_thresh,
@@ -312,9 +309,9 @@ class SpikeSorter:
                 self.cleaned_A_ica = self.A_ica[self.source_idx]
                 self.cleaned_W_ica = self.W_ica[self.source_idx]
 
-                print 'Number of cleaned sources: ', self.cleaned_sources_ica.shape[0]
+                print('Number of cleaned sources: ', self.cleaned_sources_ica.shape[0])
 
-                print 'Clustering Sources with: ', self.clustering
+                print('Clustering Sources with: ', self.clustering)
 
                 if self.clustering=='kmeans' or self.clustering=='mog':
                     # detect spikes and align
@@ -414,7 +411,7 @@ class SpikeSorter:
                         # write data file
                         filename = join(self.mountain_folder, 'raw.mda')
                         mlpy.writemda32(self.cleaned_sources_ica, filename)
-                        print 'saving ', filename
+                        print('saving ', filename)
 
 
                         # # write csv probe file
@@ -434,7 +431,7 @@ class SpikeSorter:
                         filename = join(self.mountain_folder, 'raw.mda')
                         self.reconstructed = np.matmul(self.cleaned_A_ica.T, self.cleaned_sources_ica)
                         mlpy.writemda32(self.reconstructed, filename)
-                        print 'saving ', filename
+                        print('saving ', filename)
 
                         # write csv probe file
                         with open(join(self.mountain_folder, 'geom.csv'), 'w') as f:
@@ -483,15 +480,15 @@ class SpikeSorter:
                                 subprocess.check_output(['mlp-run', 'mountainsort3.mlp', 'sort', '--raw=raw.mda',
                                                          '--geom=geom.csv', '--firings_out=firings.mda',
                                                          '--_params=params.json'])
-                                
+
                         self.processing_time = time.time() - t_start_proc
-                        print 'Elapsed time: ', self.processing_time
+                        print('Elapsed time: ', self.processing_time)
                     except subprocess.CalledProcessError as e:
                         raise Exception(e.output)
 
                     os.chdir(self.root)
 
-                    print 'Parsing output files...'
+                    print('Parsing output files...')
                     self.firings = mlpy.readmda(join(self.mountain_folder, 'firings.mda'))
                     self.spike_trains = []
                     clust_id, n_counts = np.unique(self.firings[2], return_counts=True)
@@ -520,8 +517,8 @@ class SpikeSorter:
                     self.spike_amps = [sp.annotations['ica_amp'] for sp in self.spike_trains_rej]
                     self.sst = self.spike_trains_rej
 
-                print 'Number of spike trains after clustering: ', len(self.spike_trains)
-                print 'Number of spike trains after duplicate rejection: ', len(self.sst)
+                print('Number of spike trains after clustering: ', len(self.spike_trains))
+                print('Number of spike trains after duplicate rejection: ', len(self.sst))
 
                 if 'ica_source' in self.sst[0].annotations.keys():
                     self.independent_spike_idx = [s.annotations['ica_source'] for s in self.sst]
@@ -535,12 +532,12 @@ class SpikeSorter:
                     extract_wf(self.sst, self.recordings, self.times, self.fs, ica=True, sources=self.ica_spike_sources)
 
                 self.processing_time = time.time() - t_start_proc
-                print 'Elapsed time: ', self.processing_time
+                print('Elapsed time: ', self.processing_time)
 
                 # self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst)
                 #
-                # print 'PAIRS: '
-                # print self.pairs
+                # print('PAIRS: '
+                # print(self.pairs
                 #
                 # self.performance =  compute_performance(self.counts)
                 #
@@ -562,7 +559,7 @@ class SpikeSorter:
         if self.orica:
             # TODO: quantify smoothing with and without mu
             if self.run_ss:
-                print 'Applying Online Recursive ICA'
+                print('Applying Online Recursive ICA')
                 t_start = time.time()
                 t_start_proc = time.time()
                 if not os.path.isdir(join(self.rec_folder, 'orica')):
@@ -571,10 +568,8 @@ class SpikeSorter:
 
                 chunk_size = int(2 * pq.s * self.fs.rescale('Hz'))
                 n_chunks = 1
-                adj_graph = extract_adjacency(self.mea_pos, np.max(self.mea_pitch) + 5)
                 self.s_orica, self.A_orica, self.W_orica = orICA.instICA(self.recordings, n_comp=self.ndim,
                                                                          n_chunks=n_chunks, chunk_size=chunk_size,
-                                                                         mu=mu, adjacency_graph=adj_graph,
                                                                          numpass=npass, block_size=block, mode='original')
 
                 # self.avg_smoothing = []
@@ -591,10 +586,10 @@ class SpikeSorter:
                 self.cleaned_A_orica = self.A_orica[self.source_idx]
                 self.cleaned_W_orica = self.W_orica[self.source_idx]
                 # self.cleaned_smoothing = np.array(self.avg_smoothing)[self.source_idx]
-                print 'Number of cleaned sources: ', self.cleaned_sources_orica.shape[0]
+                print('Number of cleaned sources: ', self.cleaned_sources_orica.shape[0])
 
 
-                print 'Clustering Sources with: ', self.clustering
+                print('Clustering Sources with: ', self.clustering)
                 if self.clustering=='kmeans' or self.clustering=='mog':
                     # detect spikes and align
                     self.detected_spikes = detect_and_align(spike_sources, self.fs, self.recordings,
@@ -775,7 +770,7 @@ class SpikeSorter:
                     # write data file
                     filename = join(self.mountain_folder, 'raw.mda')
                     mlpy.writemda32(self.cleaned_sources_orica, filename)
-                    print 'saving ', filename
+                    print('saving ', filename)
 
                     # # write csv probe file
                     # with open(join(self.mountain_folder, 'geom.csv'), 'w') as f:
@@ -813,14 +808,14 @@ class SpikeSorter:
                                                      '--firings_out=firings.mda',
                                                      '--_params=params.json'])
                         self.processing_time = time.time() - t_start_proc
-                        print 'Elapsed time: ', self.processing_time
+                        print('Elapsed time: ', self.processing_time)
                     except subprocess.CalledProcessError as e:
                         raise Exception(e.output)
 
                     os.chdir(self.root)
 
 
-                    print 'Parsing output files...'
+                    print('Parsing output files...')
                     self.firings = mlpy.readmda(join(self.mountain_folder, 'firings.mda'))
                     self.spike_trains = []
                     clust_id, n_counts = np.unique(self.firings[2], return_counts=True)
@@ -858,7 +853,7 @@ class SpikeSorter:
                     filename = join(self.mountain_folder, 'raw.mda')
                     self.reconstructed = np.matmul(self.cleaned_A_orica.T, self.s_orica[self.source_idx])
                     mlpy.writemda32(self.reconstructed, filename)
-                    print 'saving ', filename
+                    print('saving ', filename)
 
                     # write csv probe file
                     with open(join(self.mountain_folder, 'geom.csv'), 'w') as f:
@@ -898,14 +893,14 @@ class SpikeSorter:
                                                      '--_params=params.json'])
 
                         self.processing_time = time.time() - t_start_proc
-                        print 'Elapsed time: ', self.processing_time
+                        print('Elapsed time: ', self.processing_time)
                     except subprocess.CalledProcessError as e:
                         raise Exception(e.output)
 
                     os.chdir(self.root)
 
 
-                    print 'Parsing output files...'
+                    print('Parsing output files...')
                     self.firings = mlpy.readmda(join(self.mountain_folder, 'firings.mda'))
                     self.spike_trains = []
                     clust_id, n_counts = np.unique(self.firings[2], return_counts=True)
@@ -933,8 +928,8 @@ class SpikeSorter:
                     self.spike_amps = [sp.annotations['ica_amp'] for sp in self.spike_trains]
                     self.sst = self.spike_trains
 
-                print 'Number of spike trains after clustering: ', len(self.spike_trains)
-                print 'Number of spike trains after duplicate rejection: ', len(self.sst)
+                print('Number of spike trains after clustering: ', len(self.spike_trains))
+                print('Number of spike trains after duplicate rejection: ', len(self.sst))
 
                 self.processing_time = time.time() - t_start_proc
 
@@ -950,12 +945,12 @@ class SpikeSorter:
                 if 'ica_wf' not in self.sst[0].annotations.keys():
                     extract_wf(self.sst, self.recordings, self.times, self.fs, ica=True, sources=self.orica_spike_sources)
 
-                # print 'Average smoothing: ', np.mean(self.orica_smoothing_spike_sources), ' mu=', mu
-                print 'Elapsed time: ', time.time() - t_start
+                # print('Average smoothing: ', np.mean(self.orica_smoothing_spike_sources), ' mu=', mu
+                print('Elapsed time: ', time.time() - t_start)
 
                 # self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst)
                 #
-                # print self.pairs
+                # print(self.pairs
                 #
                 # self.performance =  compute_performance(self.counts)
                 #
@@ -976,7 +971,7 @@ class SpikeSorter:
 
         if self.orica_online:
             if self.run_ss:
-                print 'Applying ORICA online'
+                print('Applying ORICA online')
                 t_start = time.time()
                 t_start_proc = time.time()
                 if not os.path.isdir(join(self.rec_folder, 'orica-online')):
@@ -1021,7 +1016,7 @@ class SpikeSorter:
                 self.y_on = np.array(
                     [-np.sign(sk) * s for (sk, s) in zip(stats.skew(y_on_selected, axis=1), y_on_selected)])
 
-                print 'Rough spike detection to choose thresholds'
+                print('Rough spike detection to choose thresholds')
                 self.detected_spikes = detect_and_align(self.y_on, self.fs, self.recordings, n_std=8,
                                                         ref_period=2*pq.ms, upsample=1)
 
@@ -1041,7 +1036,7 @@ class SpikeSorter:
                     self.thresholds.append(th)
 
                 ## User defined thresholds and detection
-                print 'Detecting spikes based on user-defined thresholds'
+                print('Detecting spikes based on user-defined thresholds')
                 self.spikes = threshold_spike_sorting(self.y_on, self.thresholds)
 
                 # Convert spikes to neo
@@ -1055,8 +1050,8 @@ class SpikeSorter:
 
                 self.sst, self.independent_spike_idx, self.dup = reject_duplicate_spiketrains(self.spike_trains)
 
-                print 'Number of spiky sources: ', len(self.spike_trains)
-                print 'Number of spike trains after duplicate rejection: ', len(self.sst)
+                print('Number of spiky sources: ', len(self.spike_trains))
+                print('Number of spike trains after duplicate rejection: ', len(self.sst))
 
                 self.oorica_spike_sources_idx = last_idxs[self.independent_spike_idx]
                 self.oorica_spike_sources = self.ori.y[self.oorica_spike_sources_idx]
@@ -1066,10 +1061,10 @@ class SpikeSorter:
                 if 'ica_wf' not in self.sst[0].annotations.keys():
                     extract_wf(self.sst, self.recordings, self.times, self.fs, ica=True, sources=self.oorica_spike_sources)
 
-                print 'Elapsed time: ', time.time() - t_start
+                print('Elapsed time: ', time.time() - t_start)
 
                 # self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst, t_start=self.setting_time)
-                # print self.pairs
+                # print(self.pairs
                 # self.performance =  compute_performance(self.counts)
                 #
                 # if self.plot_figures:
@@ -1096,7 +1091,7 @@ class SpikeSorter:
 
         if self.threshold_online:
             if self.run_ss:
-                print 'Applying threshold online'
+                print('Applying threshold online')
                 t_start = time.time()
                 t_start_proc = time.time()
                 if not os.path.isdir(join(self.rec_folder, 'threshold-online')):
@@ -1118,11 +1113,11 @@ class SpikeSorter:
 
                 # extract_wf(self.sst, self.oorica_spike_sources, self.recordings, self.times, self.fs)
 
-                print 'Elapsed time: ', time.time() - t_start
+                print('Elapsed time: ', time.time() - t_start)
 
                 self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst)
 
-                print self.pairs
+                print(self.pairs)
 
                 self.performance =  compute_performance(self.counts)
 
@@ -1139,7 +1134,7 @@ class SpikeSorter:
 
         if self.corica:
             if self.run_ss:
-                print 'Applying Convolutive Online Recursive ICA'
+                print('Applying Convolutive Online Recursive ICA')
                 t_start = time.time()
                 chunk_size = int(2 * pq.s * self.fs.rescale('Hz'))
                 n_chunks = 1
@@ -1153,10 +1148,10 @@ class SpikeSorter:
                 self.cleaned_sources_orica = spike_sources
                 self.cleaned_A_orica = self.A_orica[self.source_idx]
                 self.cleaned_W_orica = self.W_orica[self.source_idx]
-                print 'Number of cleaned sources: ', self.cleaned_sources_orica.shape[0]
+                print('Number of cleaned sources: ', self.cleaned_sources_orica.shape[0])
 
 
-                print 'Clustering Sources with: ', self.clustering
+                print('Clustering Sources with: ', self.clustering)
                 if self.clustering=='kmeans' or self.clustering=='mog':
                     # detect spikes and align
                     self.detected_spikes = detect_and_align(spike_sources, self.fs, self.recordings,
@@ -1187,11 +1182,11 @@ class SpikeSorter:
 
                 self.sst = self.spike_trains_rej
 
-                print 'Elapsed time: ', time.time() - t_start
+                print('Elapsed time: ', time.time() - t_start)
 
                 self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst)
 
-                print self.pairs
+                print(self.pairs)
 
                 self.performance =  compute_performance(self.counts)
 
@@ -1201,7 +1196,7 @@ class SpikeSorter:
 
 
         if self.klusta:
-            print 'Applying Klustakwik algorithm'
+            print('Applying Klustakwik algorithm')
             t_start = time.time()
 
             if not os.path.isdir(join(self.rec_folder, 'klusta')):
@@ -1249,7 +1244,7 @@ class SpikeSorter:
                     t_start_proc = time.time()
                     subprocess.check_output(['klusta', join(self.klusta_folder, 'config.prm'), '--overwrite'])
                     self.processing_time = time.time() - t_start_proc
-                    print 'Elapsed time: ', self.processing_time
+                    print('Elapsed time: ', self.processing_time)
                 except subprocess.CalledProcessError as e:
                     raise Exception(e.output)
 
@@ -1265,8 +1260,8 @@ class SpikeSorter:
 
                 # self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst)
                 #
-                # print 'PAIRS: '
-                # print self.pairs
+                # print('PAIRS: '
+                # print(self.pairs
                 #
                 # self.performance =  compute_performance(self.counts)
                 #
@@ -1274,7 +1269,7 @@ class SpikeSorter:
                 #     ax1, ax2 = self.plot_results()
                 #     ax1.set_title('KLUSTA', fontsize=20)
 
-                print 'Elapsed time: ', time.time() - t_start
+                print('Elapsed time: ', time.time() - t_start)
 
                 # save results
                 if not os.path.isdir(join(self.klusta_folder, 'results')):
@@ -1288,7 +1283,7 @@ class SpikeSorter:
 
 
         if self.kilo:
-            print 'Applying Kilosort algorithm'
+            print('Applying Kilosort algorithm')
 
             t_start = time.time()
 
@@ -1354,13 +1349,13 @@ class SpikeSorter:
                     subprocess.call(['matlab', '-nodisplay', '-nodesktop',
                                      '-nosplash', '-r',
                                      'run kilosort_master.m; exit;'])
-                    print 'Elapsed time: ', time.time() - t_start_proc
+                    print('Elapsed time: ', time.time() - t_start_proc)
                 except subprocess.CalledProcessError as e:
                     raise Exception(e.output)
 
                 os.chdir(self.root)
 
-                print 'Parsing output files...'
+                print('Parsing output files...')
                 self.spike_times = np.load(join(self.kilo_process_folder, 'spike_times.npy'))
                 self.spike_clusters = np.load(join(self.kilo_process_folder, 'spike_clusters.npy'))
                 self.kl_templates = np.load(join(self.kilo_process_folder, 'templates.npy')).swapaxes(1, 2)
@@ -1387,16 +1382,16 @@ class SpikeSorter:
 
                 self.spike_templates = np.array(self.spike_templates)
 
-                # print 'Finding independent spiketrains...'
+                # print('Finding independent spiketrains...'
                 # self.sst, self.independent_spike_idx, self.dup = reject_duplicate_spiketrains(self.spike_trains)
-                # print 'Found ', len(self.sst), ' independent spiketrains!'
+                # print('Found ', len(self.sst), ' independent spiketrains!'
                 self.sst = self.spike_trains
 
-                # print 'Evaluating spiketrains...'
+                # print('Evaluating spiketrains...'
                 # self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst)
                 #
-                # print 'PAIRS: '
-                # print self.pairs
+                # print('PAIRS: '
+                # print(self.pairs
                 #
                 # self.performance = compute_performance(self.counts)
                 #
@@ -1404,7 +1399,7 @@ class SpikeSorter:
                 #     ax1, ax2 = self.plot_results()
                 #     ax1.set_title('KILOSORT', fontsize=20)
 
-                print 'Total elapsed time: ', time.time() - t_start
+                print('Total elapsed time: ', time.time() - t_start)
 
                 # save results
                 if not os.path.isdir(join(self.kilo_folder, 'results')):
@@ -1419,7 +1414,7 @@ class SpikeSorter:
 
 
         if self.mountain:
-            print 'Applying Mountainsort algorithm'
+            print('Applying Mountainsort algorithm')
 
             sys.path.append(join(self.root, 'spikesorter_files', 'mountainsort_files'))
 
@@ -1441,7 +1436,7 @@ class SpikeSorter:
             # write data file
             filename = join(self.mountain_folder, 'raw.mda')
             mlpy.writemda32(self.recordings, filename)
-            print 'saving ', filename
+            print('saving ', filename)
             radius = 50
 
             # write csv probe file
@@ -1479,13 +1474,13 @@ class SpikeSorter:
                         subprocess.check_output(['mlp-run', 'mountainsort3.mlp', 'sort', '--raw=raw.mda',
                                                  '--geom=geom.csv', '--firings_out=firings.mda', '--_params=params.json'])
                     self.processing_time = time.time() - t_start_proc
-                    print 'Elapsed time: ', self.processing_time
+                    print('Elapsed time: ', self.processing_time)
                 except subprocess.CalledProcessError as e:
                     raise Exception(e.output)
 
                 os.chdir(self.root)
 
-                print 'Parsing output files...'
+                print('Parsing output files...')
                 self.firings = mlpy.readmda(join(self.mountain_folder, 'firings.mda'))
                 self.spike_trains = []
                 clust_id, n_counts = np.unique(self.firings[2], return_counts=True)
@@ -1500,19 +1495,19 @@ class SpikeSorter:
                         spiketrain = neo.SpikeTrain(spike_times, t_start=self.t_start, t_stop=self.t_stop)
                         self.spike_trains.append(spiketrain)
 
-                # print 'Finding independent spiketrains...'
+                # print('Finding independent spiketrains...'
                 # self.sst, self.independent_spike_idx, self.dup = reject_duplicate_spiketrains(self.spike_trains)
                 self.sst = self.spike_trains
-                print 'Found ', len(self.sst), ' independent spiketrains!'
+                print('Found ', len(self.sst), ' independent spiketrains!')
 
-                print 'Extracting waveforms'
+                print('Extracting waveforms')
                 extract_wf(self.sst, self.recordings, self.times, self.fs)
 
-                # print 'Evaluating spiketrains...'
+                # print('Evaluating spiketrains...'
                 # self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst)
                 #
-                # print 'PAIRS: '
-                # print self.pairs
+                # print('PAIRS: '
+                # print(self.pairs
                 #
                 # self.performance =  compute_performance(self.counts)
                 #
@@ -1520,7 +1515,7 @@ class SpikeSorter:
                 #     ax1, ax2 = self.plot_results()
                 #     ax1.set_title('MOUNTAINSORT', fontsize=20)
 
-                print 'Total elapsed time: ', time.time() - t_start
+                print('Total elapsed time: ', time.time() - t_start)
 
                 # save results
                 if not os.path.isdir(join(self.mountain_folder, 'results')):
@@ -1533,7 +1528,7 @@ class SpikeSorter:
                 # np.save(join(self.mountain_folder, 'results', 'time'), self.processing_time)
 
         if self.circus:
-            print 'Applying Spyking-circus algorithm'
+            print('Applying Spyking-circus algorithm')
             t_start = time.time()
 
             if not os.path.isdir(join(self.rec_folder, 'spykingcircus')):
@@ -1589,11 +1584,11 @@ class SpikeSorter:
                     if self.merge_spikes:
                         subprocess.call(['spyking-circus', 'recordings.npy', '-m', 'merging', '-c', str(n_cores)])
                     self.processing_time = time.time() - t_start_proc
-                    print 'Elapsed time: ', self.processing_time
+                    print('Elapsed time: ', self.processing_time)
                 except subprocess.CalledProcessError as e:
                     raise Exception(e.output)
 
-                print 'Parsing output files...'
+                print('Parsing output files...')
                 os.chdir(self.root)
                 if self.merge_spikes:
                     f = h5py.File(join(self.spykingcircus_folder, filename, filename + '.result-merged.hdf5'))
@@ -1617,16 +1612,16 @@ class SpikeSorter:
                         spiketrain = neo.SpikeTrain(spike_times, t_start=self.t_start, t_stop=self.t_stop)
                         self.spike_trains.append(spiketrain)
                     else:
-                        print 'Discarded spike train ', i_st
+                        print('Discarded spike train ', i_st)
 
                 self.sst = self.spike_trains
-                print 'Found ', len(self.sst), ' independent spiketrains!'
+                print('Found ', len(self.sst), ' independent spiketrains!')
 
-                # print 'Evaluating spiketrains...'
+                # print('Evaluating spiketrains...'
                 # self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst)
                 #
-                # print 'PAIRS: '
-                # print self.pairs
+                # print('PAIRS: '
+                # print(self.pairs
                 #
                 # self.performance =  compute_performance(self.counts)
                 #
@@ -1634,7 +1629,7 @@ class SpikeSorter:
                 #     ax1, ax2 = self.plot_results()
                 #     ax1.set_title('SPYKING-CIRCUS', fontsize=20)
 
-                print 'Elapsed time: ', time.time() - t_start
+                print('Elapsed time: ', time.time() - t_start)
 
                 # save results
                 if not os.path.isdir(join(self.spykingcircus_folder, 'results')):
@@ -1649,7 +1644,7 @@ class SpikeSorter:
 
 
         if self.yass:
-            print 'Applying YASS algorithm'
+            print('Applying YASS algorithm')
             t_start = time.time()
 
             if not os.path.isdir(join(self.rec_folder, 'yass')):
@@ -1695,11 +1690,11 @@ class SpikeSorter:
                     t_start_proc = time.time()
                     subprocess.check_output(['yass', 'config.yaml'])
                     self.processing_time = time.time() - t_start_proc
-                    print 'Elapsed time: ', self.processing_time
+                    print('Elapsed time: ', self.processing_time)
                 except subprocess.CalledProcessError as e:
                     raise Exception(e.output)
 
-                print 'Parsing output files...'
+                print('Parsing output files...')
                 os.chdir(self.root)
 
                 import csv
@@ -1726,11 +1721,11 @@ class SpikeSorter:
 
                 self.sst = self.spike_trains
 
-                print 'Evaluating spiketrains...'
+                print('Evaluating spiketrains...')
                 self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst)
 
-                print 'PAIRS: '
-                print self.pairs
+                print('PAIRS: ')
+                print(self.pairs)
 
                 self.performance = compute_performance(self.counts)
 
@@ -1738,7 +1733,7 @@ class SpikeSorter:
                     ax1, ax2 = self.plot_results()
                     ax1.set_title('YASS', fontsize=20)
 
-                print 'Elapsed time: ', time.time() - t_start
+                print('Elapsed time: ', time.time() - t_start)
 
                 # save results
                 if not os.path.isdir(join(self.yass_folder, 'results')):
@@ -1747,30 +1742,30 @@ class SpikeSorter:
                 np.save(join(self.yass_folder, 'results', 'performance'), self.performance)
                 np.save(join(self.yass_folder, 'results', 'time'), self.processing_time)
 
-        print 'DONE'
+        print('DONE')
 
         if eval:
-            print 'Matching spike trains'
+            print('Matching spike trains')
             self.counts, self.pairs = evaluate_spiketrains(self.gtst, self.sst, t_jitt=3 * pq.ms)
 
-            print 'PAIRS: '
-            print self.pairs
+            print('PAIRS: ')
+            print(self.pairs)
 
-            print 'Computing performance'
+            print('Computing performance')
             self.performance = compute_performance(self.counts)
 
-            print 'Calculating confusion matrix'
+            print('Calculating confusion matrix')
             self.conf = confusion_matrix(self.gtst, self.sst, self.pairs[:, 1])
 
-            # print 'Matching only identified spike trains'
+            # print('Matching only identified spike trains'
             # pairs_gt_red = pairs[:, 0][np.where(pairs[:, 0] != -1)]
             # gtst_id = np.array(gtst_red)[pairs_gt_red]
             # counts_id, pairs_id = evaluate_spiketrains(gtst_id, sst, t_jitt=3 * pq.ms)
             #
-            # print 'Computing performance on only identified spike trains'
+            # print('Computing performance on only identified spike trains'
             # performance_id = compute_performance(counts_id)
             #
-            # print 'Calculating confusion matrix'
+            # print('Calculating confusion matrix'
             # conf_id = confusion_matrix(gtst_id, sst, pairs_id[:, 1])
 
             if plot_figures:
@@ -1864,7 +1859,7 @@ if __name__ == '__main__':
         pos = sys.argv.index('-feat')
         feat = sys.argv[pos + 1]
     else:
-        feat = 'pca'
+        feat = 'amp'
     if '-clust' in sys.argv:
         pos = sys.argv.index('-clust')
         clust = sys.argv[pos + 1]
@@ -1893,11 +1888,11 @@ if __name__ == '__main__':
         keepall=True
 
     if len(sys.argv) == 1 and not debug:
-        print 'Arguments: \n   -r recording filename\n   -mod ICA - orica - oricaonline - threshonline - klusta' \
+        print('Arguments: \n   -r recording filename\n   -mod ICA - orica - oricaonline - threshonline - klusta' \
               '- kilosort - mountainsort - spykingcircus  -yass\n   -dur duration in s\n   -tstart start time in s\n' \
               '   -tstop stop time in s\n   -M   number of dimensions\n   -thresh threshold for spike detection\n' \
               '   -block ORICA block size\n   -feat amp|pca feature to use for clustering\n   -clust mog|kmeans ' \
-              'clustering algorithm\n   -nokeep only keep largest cluster'
+              'clustering algorithm\n   -nokeep only keep largest cluster')
 
     elif '-r' not in sys.argv and not debug:
         raise AttributeError('Provide model folder for data')
