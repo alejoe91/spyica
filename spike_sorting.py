@@ -14,7 +14,6 @@ import json
 import yaml
 import time
 import h5py
-import ipdb
 
 from tools import *
 from neuroplot import *
@@ -691,7 +690,7 @@ class SpikeSorter:
                     self.klusta_full_path = join(self.klusta_folder, 'recording')
                     # create prb and prm files
                     prb_path = export_prb_file(self.mea_pos.shape[0], self.electrode_name, self.klusta_folder,
-                                               pos=self.mea_pos, adj_dist=2 * np.max(self.mea_pitch))
+                                               pos=self.mea_pos, adj_dist=50)
                     # save binary file
                     filename = join(self.klusta_folder, 'recordings')
                     self.reconstructed = np.matmul(self.cleaned_A_orica.T, self.s_orica[self.source_idx])
@@ -1210,7 +1209,7 @@ class SpikeSorter:
             self.klusta_full_path = join(self.klusta_folder, 'recording')
             # create prb and prm files
             prb_path = export_prb_file(self.mea_pos.shape[0], self.electrode_name, self.klusta_folder,
-                                       pos=self.mea_pos, adj_dist=2*np.max(self.mea_pitch))
+                                       pos=self.mea_pos, adj_dist=50)
             # save binary file
             filename = join(self.klusta_folder, 'recordings')
             file_path = save_binary_format(join(self.klusta_folder, 'recordings'), self.recordings,
@@ -1541,7 +1540,7 @@ class SpikeSorter:
                 rec_name = rec_name[-1]
             # create prb and prm files
             prb_path = export_prb_file(self.mea_pos.shape[0], self.electrode_name, self.spykingcircus_folder,
-                                       pos=self.mea_pos, adj_dist=2*np.max(self.mea_pitch), spikesorter='spykingcircus',
+                                       pos=self.mea_pos, adj_dist=50, spikesorter='spykingcircus',
                                        radius=50)
 
             filename = 'recordings'
