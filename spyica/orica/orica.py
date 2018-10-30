@@ -11,7 +11,7 @@ from scipy.linalg import sqrtm
 from scipy.linalg import eigh
 from scipy.linalg import LinAlgError
 from sklearn.decomposition import PCA
-from .tools import whiten_data
+from spyica.tools import whiten_data
 
 class State():
     def __init__(self, icaweights, icasphere, lambda_k, minNonStatIdx, counter, Rn, nonStatIdx, kurtsign,

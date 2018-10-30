@@ -87,7 +87,7 @@ if __name__ == '__main__':
     from os.path import join
     from scipy import stats
     import MEAutility as MEA
-    from .tools import *
+    from spike_sorting.spyica.spyica.tools import *
     import yaml
     from spike_sorting import plot_mixing
 

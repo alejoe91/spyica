@@ -53,7 +53,7 @@ def whiten_data(X, n_comp=None):
 ############ SPYICA ######################3
 
 
-def detect_and_align(sources, fs, recordings, t_start=None, t_stop=None, n_std=5, ref_period=2*pq.ms, upsample=8):
+def detect_and_align(sources, fs, recordings, t_start=None, t_stop=None, n_std=5, ref_period_ms=2, n_pad_ms=2, upsample=8):
     '''
 
     Parameters
@@ -78,42 +78,44 @@ def detect_and_align(sources, fs, recordings, t_start=None, t_stop=None, n_std=5
     idx_spikes = []
     idx_sources = []
     spike_trains = []
-    times = np.arange(sources.shape[1]) / fs * pq.s
-    unit = times[0].rescale('ms').units
-    fs = fs * pq.Hz
+    times = np.arange(sources.shape[1])
+    ref_period = int((ref_period_ms / 1000.0) * fs)
+    n_pad = int((n_pad_ms / 1000.0) * fs)
 
     for s_idx, s in enumerate(sources):
         thresh = -n_std * np.median(np.abs(s) / 0.6745)
         idx_spike = np.where(s < thresh)[0]
         idx_spikes.append(idx_spike)
+        intervals = np.diff(idx_spike)
 
-        n_pad = int(2 * pq.ms * fs.rescale('kHz'))
         sp_times = []
         sp_wf = []
         sp_rec_wf = []
         sp_amp = []
         first_spike = True
 
-        for t in range(len(idx_spike) - 1):
-            idx = idx_spike[t]
-            # find single waveforms crossing thresholds
-            if idx_spike[t + 1] - idx > 1 or t == len(idx_spike) - 2:  # single spike
+        for i_t, t in enumerate(intervals):
+            idx = idx_spike[i_t]
+            if t > 1 or i_t == len(intervals)-1:
                 if idx - n_pad > 0 and idx + n_pad < len(s):
                     spike = s[idx - n_pad:idx + n_pad]
-                    t_spike = times[idx - n_pad:idx + n_pad]
+                    # t_spike = times[idx - n_pad:idx + n_pad]
+                    t_spike = np.arange(idx - n_pad, idx + n_pad)
                     spike_rec = recordings[:, idx - n_pad:idx + n_pad]
                 elif idx - n_pad < 0:
                     spike = s[:idx + n_pad]
                     spike = np.pad(spike, (np.abs(idx - n_pad), 0), 'constant')
-                    t_spike = times[:idx + n_pad]
-                    t_spike = np.pad(t_spike, (np.abs(idx - n_pad), 0), 'constant') * unit
+                    # t_spike = times[:idx + n_pad]
+                    t_spike = np.arange(idx + n_pad)
+                    t_spike = np.pad(t_spike, (np.abs(idx - n_pad), 0), 'constant')
                     spike_rec = recordings[:, :idx + n_pad]
                     spike_rec = np.pad(spike_rec, ((0, 0), (np.abs(idx - n_pad), 0)), 'constant')
                 elif idx + n_pad > len(s):
                     spike = s[idx - n_pad:]
                     spike = np.pad(spike, (0, idx + n_pad - len(s)), 'constant')
-                    t_spike = times[idx - n_pad:]
-                    t_spike = np.pad(t_spike, (0, idx + n_pad - len(s)), 'constant') * unit
+                    # t_spike = times[idx - n_pad:]
+                    t_spike = np.arange(idx - n_pad, sources.shape[1])
+                    t_spike = np.pad(t_spike, (0, idx + n_pad - len(s)), 'constant')
                     spike_rec = recordings[:, idx - n_pad:]
                     spike_rec = np.pad(spike_rec, ((0, 0), (0, idx + n_pad - len(s))), 'constant')
 
@@ -125,8 +127,8 @@ def detect_and_align(sources, fs, recordings, t_start=None, t_stop=None, n_std=5
                 # upsample and find minimum
                 if upsample > 1:
                     spike_up = ss.resample_poly(spike, upsample, 1)
-                    # times_up = ss.resample_poly(t_spike, upsample, 1)*unit
-                    t_spike_up = np.linspace(t_spike[0].magnitude, t_spike[-1].magnitude, num=len(spike_up)) * unit
+                    # times_up = ss.resample_poly(t_spike, upsample, 1
+                    t_spike_up = np.linspace(t_spike[0], t_spike[-1], num=len(spike_up))
                 else:
                     spike_up = spike
                     t_spike_up = t_spike
@@ -147,6 +149,7 @@ def detect_and_align(sources, fs, recordings, t_start=None, t_stop=None, n_std=5
                     spike_up = np.pad(spike_up, (0, np.abs(shift)), 'constant')[-nsamples_up:]
 
                 if len(sp_times) != 0:
+                    # print(min_time_up, sp_times[-1])
                     if min_time_up - sp_times[-1] > ref_period:
                         sp_wf.append(spike_up)
                         sp_rec_wf.append(spike_rec)
@@ -160,21 +163,20 @@ def detect_and_align(sources, fs, recordings, t_start=None, t_stop=None, n_std=5
 
         if t_start and t_stop:
             for i, sp in enumerate(sp_times):
-                if sp.magnitude * unit < t_start:
-                    sp_times[i] = t_start.rescale('ms')
-                if  sp.magnitude * unit > t_stop:
-                    sp_times[i] = t_stop.rescale('ms')
+                if sp < t_start.rescale('s').magnitude * fs:
+                    sp_times[i] = t_start.rescale('s').magnitude * fs
+                if  sp > t_stop.rescale('s').magnitude * fs:
+                    sp_times[i] = t_stop.rescale('s').magnitude * fs
         elif t_stop:
             for i, sp in enumerate(sp_times):
-                if sp > t_stop:
-                    sp_times[i] = t_stop.rescale('ms')
+                if  sp > t_stop.rescale('s').magnitude * fs:
+                    sp_times[i] = t_stop.rescale('s').magnitude * fs
         else:
             t_start = 0 * pq.s
-            t_stop = sp_times[-1]
+            t_stop = sp_times[-1] / fs * pq.s
 
-        spiketrain = neo.SpikeTrain([sp.magnitude for sp in sp_times] * unit, t_start=0 * pq.s, t_stop=t_stop,
+        spiketrain = neo.SpikeTrain(np.array(sp_times) / fs * pq.s, t_start=t_start, t_stop=t_stop,
                                     waveforms=np.array(sp_rec_wf))
-
         spiketrain.annotate(ica_amp=np.array(sp_amp))
         spiketrain.annotate(ica_wf=np.array(sp_wf))
         spike_trains.append(spiketrain)
@@ -905,3 +907,36 @@ def find_consistent_sorces(source_idx, thresh=0.5):
             consistent_sources.append(id)
 
     return np.sort(consistent_sources)
+
+
+def threshold_spike_sorting(recordings, threshold):
+    '''
+
+    Parameters
+    ----------
+    recordings
+    threshold
+
+    Returns
+    -------
+
+    '''
+    spikes = {}
+    for i_rec, rec in enumerate(recordings):
+        sp_times = []
+        if isinstance(threshold, list):
+            idx_spikes = np.where(rec < threshold[i_rec])
+        else:
+            idx_spikes = np.where(rec < threshold)
+        if len(idx_spikes[0]) != 0:
+            idx_spikes = idx_spikes[0]
+            for t, idx in enumerate(idx_spikes):
+                # find single waveforms crossing thresholds
+                if t == 0:
+                    sp_times.append(idx)
+                elif idx - idx_spikes[t - 1] > 1:  # or t == len(idx_spike) - 2:  # single spike
+                    sp_times.append(idx)
+
+            spikes.update({i_rec: sp_times})
+
+    return spikes

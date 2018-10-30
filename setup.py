@@ -9,7 +9,7 @@ setuptools.setup(
     author_email="alessiop.buccino@gmail.com",
     description="Spike sorting based on ICA and ORICA",
     url="https://github.com/alejoe91/spyica",
-    packages=setuptools.find_packages(),
+    packages="spyica",
     install_requires=[
         'numpy',
         'scipy',
