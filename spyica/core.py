@@ -1,5 +1,5 @@
 from .tools import clean_sources, cluster_spike_amplitudes, detect_and_align, \
-    reject_duplicate_spiketrains, threshold_spike_sorting
+    reject_duplicate_spiketrains, threshold_spike_sorting, find_consistent_sorces
 import spyica.ica as ica
 import spyica.orica as orica
 
@@ -158,9 +158,10 @@ def orica_spike_sorting(recording, clustering='mog', n_comp='all',
 
 
 
-def online_orica_spike_sorting(recording, n_comp='all', pca_window=10, ica_window=10, skew_window=5, step=1, skew_thresh=0.5,
+def online_orica_spike_sorting(recording, n_comp='all', pca_window=0, ica_window=0, skew_window=5, step=1, skew_thresh=0.5,
                                online=False, detect=True, calibPCA=True, ff='cooling', lambda_val=0.995, dtype='int16',
-                               verbose=True, detect_thresh=10, block_size=800):
+                               verbose=True, detect_thresh=10, white_mode='pca', pca_block=2000,
+                               ica_block=800):
     import matplotlib.pylab as plt
 
     if n_comp == 'all':
@@ -172,15 +173,17 @@ def online_orica_spike_sorting(recording, n_comp='all', pca_window=10, ica_windo
     fs = recording.getSamplingFrequency()
     traces = recording.getTraces().astype(dtype)
     ori = orica.onlineORICAss(traces, fs=fs, onlineWhitening=online, calibratePCA=calibPCA, ndim=n_comp,
-                              forgetfac=ff, lambda_0=lambda_val, numpass=1, block=block_size, step_size=step,
+                              forgetfac=ff, lambda_0=lambda_val, numpass=1, step_size=step,
                               skew_window=skew_window, pca_window=pca_window,ica_window=ica_window, verbose=True,
-                              detect_trheshold=detect_thresh, onlineDetection=False)
+                              detect_trheshold=detect_thresh, onlineDetection=False, white_mode=white_mode,
+                              pca_block=pca_block, ica_block=ica_block)
     if verbose:
         t_orica_online = time.time() - t_init
         print('Online ORICA completed in: ', t_orica_online)
 
-    # last_idxs = find_consistent_sorces(ori.source_idx, thresh=0.5)
-    last_idxs = ori.all_sources
+
+    last_idxs = find_consistent_sorces(ori.source_idx, thresh=0.5)
+    # last_idxs = ori.all_sources
     last_idxs = last_idxs[np.argsort(np.abs(stats.skew(ori.y[last_idxs], axis=1)))[::-1]]
     n_id = len(last_idxs)
 
@@ -248,5 +251,48 @@ def online_orica_spike_sorting(recording, n_comp='all', pca_window=10, ica_windo
 
     return sorting, ica_spike_sources
 
+
+def orica_alg(recording,  n_comp='all',
+              dtype='int16', block_size=800, ff='cooling', num_pass=1,
+              verbose=True):
+
+    if n_comp == 'all':
+        n_comp = recording.getNumChannels()
+    fs = recording.getSamplingFrequency()
+    if verbose:
+        print('Applying Online Recursive ICA')
+        t_init = time.time()
+    traces = recording.getTraces().astype(dtype)
+    ori = orica.ORICA(traces, ndim=n_comp, block_size=block_size, numpass=num_pass,
+                                            forgetfac=ff, verbose=verbose)
+    if verbose:
+        t_orica = time.time() - t_init
+        print('ORICA completed in: ', t_orica)
+
+    return ori
+
+def online_orica_alg(recording, n_comp='all', pca_window=10, ica_window=10, skew_window=5, step=1, skew_thresh=0.5,
+                               online=False, detect=True, calibPCA=True, ff='cooling', lambda_val=0.995, dtype='int16',
+                               verbose=True, detect_thresh=10, pca_block=3000, ica_block=1000):
+
+    if n_comp == 'all':
+        n_comp = recording.getNumChannels()
+    fs = recording.getSamplingFrequency()
+    if verbose:
+        print('Applying Online ORICA spike sorting')
+        t_init = time.time()
+    fs = recording.getSamplingFrequency()
+    traces = recording.getTraces().astype(dtype)
+    ori = orica.onlineORICAss(traces, fs=fs, onlineWhitening=online, calibratePCA=calibPCA, ndim=n_comp,
+                              forgetfac=ff, lambda_0=lambda_val, numpass=1, pca_block=pca_block, ica_block=ica_block,
+                              step_size=step,
+                              skew_window=skew_window, pca_window=pca_window, ica_window=ica_window, verbose=True,
+                              detect_trheshold=detect_thresh, onlineDetection=False)
+
+    if verbose:
+        t_orica_online = time.time() - t_init
+        print('Online ORICA completed in: ', t_orica_online)
+
+    return ori
 
 
