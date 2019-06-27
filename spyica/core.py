@@ -1,30 +1,31 @@
-from .tools import clean_sources, cluster_spike_amplitudes, detect_and_align, \
-    reject_duplicate_spiketrains, threshold_spike_sorting, find_consistent_sorces
+import time
+
+import neo
+import numpy as np
+import quantities as pq
+import scipy.stats as stats
+import spikeextractors  as se
 import spyica.ica as ica
 import spyica.orica as orica
 
-import quantities as pq
-import neo
-import scipy.stats as stats
-import spikeinterface as si
-import numpy as np
-import time
+from .tools import clean_sources, cluster_spike_amplitudes, detect_and_align, \
+    reject_duplicate_spiketrains, threshold_spike_sorting, find_consistent_sorces
+
 
 def ica_spike_sorting(recording, clustering='mog', n_comp='all',
                       features='amp', skew_thresh=0.2, kurt_thresh=1,
                       n_chunks=0, chunk_size=0, spike_thresh=5, dtype='int16',
                       keep_all_clusters=False, verbose=True):
-
-    if not isinstance(recording, si.RecordingExtractor):
+    if not isinstance(recording, se.RecordingExtractor):
         raise Exception("Input a RecordingExtractor object!")
 
     if n_comp == 'all':
-        n_comp = recording.getNumChannels()
-    fs = recording.getSamplingFrequency()
+        n_comp = recording.get_num_channels()
+    fs = recording.get_sampling_frequency()
     if verbose:
         print('Applying FastICA algorithm')
         t_init = time.time()
-    traces = recording.getTraces().astype(dtype)
+    traces = recording.get_traces().astype(dtype)
     s_ica, A_ica, W_ica = ica.instICA(traces, n_comp=n_comp, n_chunks=n_chunks, chunk_size=chunk_size)
     if verbose:
         t_ica = time.time() - t_init
@@ -39,8 +40,8 @@ def ica_spike_sorting(recording, clustering='mog', n_comp='all',
         print('Number of cleaned sources: ', cleaned_sources_ica.shape[0])
         print('Clustering Sources with: ', clustering)
 
-    t_start = 0*pq.s
-    t_stop = recording.getNumFrames() / float(fs) * pq.s
+    t_start = 0 * pq.s
+    t_stop = recording.get_num_frames() / float(fs) * pq.s
 
     if clustering == 'kmeans' or clustering == 'mog':
         # detect spikes and align
@@ -71,17 +72,19 @@ def ica_spike_sorting(recording, clustering='mog', n_comp='all',
     if verbose:
         print('Elapsed time: ', processing_time)
 
-    sorting = si.NumpySortingExtractor()
+    sorting = se.NumpySortingExtractor()
     times = np.array([])
     labels = np.array([])
     for i_s, st in enumerate(sst):
         times = np.concatenate((times, (st.times.magnitude * fs).astype(int)))
         labels = np.concatenate((labels, np.array([i_s + 1] * len(st.times))))
 
-    sorting.setTimesLabels(times, labels)
+    sorting.set_times_labels(times, labels)
+    sorting.set_sampling_frequency(recording.get_sampling_frequency)
+
     # TODO add spike properties and features
 
-    return sorting, cleaned_sources_ica
+    return sorting #, cleaned_sources_ica
 
 
 def orica_spike_sorting(recording, clustering='mog', n_comp='all',
@@ -89,14 +92,13 @@ def orica_spike_sorting(recording, clustering='mog', n_comp='all',
                         n_chunks=0, chunk_size=0, spike_thresh=5, dtype='int16',
                         keep_all_clusters=False, block_size=800, ff='cooling', num_pass=1,
                         verbose=True):
-
     if n_comp == 'all':
-        n_comp = recording.getNumChannels()
-    fs = recording.getSamplingFrequency()
+        n_comp = recording.get_num_channels()
+    fs = recording.get_sampling_frequency()
     if verbose:
         print('Applying Online Recursive ICA')
         t_init = time.time()
-    traces = recording.getTraces().astype(dtype)
+    traces = recording.get_traces().astype(dtype)
     s_orica, A_orica, W_orica = orica.instICA(traces, n_comp=n_comp,
                                               n_chunks=n_chunks, chunk_size=chunk_size,
                                               numpass=num_pass, block_size=block_size)
@@ -113,8 +115,8 @@ def orica_spike_sorting(recording, clustering='mog', n_comp='all',
         print('Number of cleaned sources: ', cleaned_sources_orica.shape[0])
         print('Clustering Sources with: ', clustering)
 
-    t_start = 0*pq.s
-    t_stop = recording.getNumFrames() / float(fs) * pq.s
+    t_start = 0 * pq.s
+    t_stop = recording.get_num_frames() / float(fs) * pq.s
 
     if clustering == 'kmeans' or clustering == 'mog':
         # detect spikes and align
@@ -145,42 +147,42 @@ def orica_spike_sorting(recording, clustering='mog', n_comp='all',
     if verbose:
         print('Elapsed time: ', processing_time)
 
-    sorting = si.NumpySortingExtractor()
+    sorting = se.NumpySortingExtractor()
     times = np.array([])
     labels = np.array([])
     for i_s, st in enumerate(sst):
         times = np.concatenate((times, (st.times.magnitude * fs).astype(int)))
         labels = np.concatenate((labels, np.array([i_s + 1] * len(st.times))))
 
-    sorting.setTimesLabels(times, labels)
+    sorting.set_times_labels(times, labels)
+    sorting.set_sampling_frequency(recording.get_sampling_frequency)
 
-    return sorting, ica_spike_sources
+    return sorting #, ica_spike_sources
 
 
-
-def online_orica_spike_sorting(recording, n_comp='all', pca_window=0, ica_window=0, skew_window=5, step=1, skew_thresh=0.5,
+def online_orica_spike_sorting(recording, n_comp='all', pca_window=0, ica_window=0, skew_window=5, step=1,
+                               skew_thresh=0.5,
                                online=False, detect=True, calibPCA=True, ff='cooling', lambda_val=0.995, dtype='int16',
                                verbose=True, detect_thresh=10, white_mode='pca', pca_block=2000,
                                ica_block=800):
     import matplotlib.pylab as plt
 
     if n_comp == 'all':
-        n_comp = recording.getNumChannels()
-    fs = recording.getSamplingFrequency()
+        n_comp = recording.get_num_channels()
+    fs = recording.get_sampling_frequency()
     if verbose:
         print('Applying Online ORICA spike sorting')
         t_init = time.time()
-    fs = recording.getSamplingFrequency()
-    traces = recording.getTraces().astype(dtype)
+    fs = recording.get_sampling_frequency()
+    traces = recording.get_traces().astype(dtype)
     ori = orica.onlineORICAss(traces, fs=fs, onlineWhitening=online, calibratePCA=calibPCA, ndim=n_comp,
                               forgetfac=ff, lambda_0=lambda_val, numpass=1, step_size=step,
-                              skew_window=skew_window, pca_window=pca_window,ica_window=ica_window, verbose=True,
+                              skew_window=skew_window, pca_window=pca_window, ica_window=ica_window, verbose=True,
                               detect_trheshold=detect_thresh, onlineDetection=False, white_mode=white_mode,
                               pca_block=pca_block, ica_block=ica_block)
     if verbose:
         t_orica_online = time.time() - t_init
         print('Online ORICA completed in: ', t_orica_online)
-
 
     last_idxs = find_consistent_sorces(ori.source_idx, thresh=0.5)
     # last_idxs = ori.all_sources
@@ -194,7 +196,7 @@ def online_orica_spike_sorting(recording, n_comp='all', pca_window=0, ica_window
     if verbose:
         print('Rough spike detection to choose thresholds')
     t_start = 0 * pq.s
-    t_stop = recording.getNumFrames() / float(fs) * pq.s
+    t_stop = recording.get_num_frames() / float(fs) * pq.s
     detected_spikes = detect_and_align(y_on, fs, traces, t_start=t_start, t_stop=t_stop, n_std=5, upsample=1)
 
     # Manual thresholding
@@ -240,49 +242,49 @@ def online_orica_spike_sorting(recording, n_comp='all', pca_window=0, ica_window
     if verbose:
         print('Elapsed time: ', time.time() - t_init)
 
-    sorting = si.NumpySortingExtractor()
+    sorting = se.NumpySortingExtractor()
     times = np.array([])
     labels = np.array([])
     for i_s, st in enumerate(sst):
         times = np.concatenate((times, (st.times.magnitude * fs).astype(int)))
         labels = np.concatenate((labels, np.array([i_s + 1] * len(st.times))))
 
-    sorting.setTimesLabels(times, labels)
+    sorting.set_times_labels(times, labels)
+    sorting.set_sampling_frequency(recording.get_sampling_frequency)
 
-    return sorting, ica_spike_sources
+    return sorting #, ica_spike_sources
 
 
-def orica_alg(recording,  n_comp='all',
+def orica_alg(recording, n_comp='all',
               dtype='int16', block_size=800, ff='cooling', num_pass=1,
               verbose=True):
-
     if n_comp == 'all':
-        n_comp = recording.getNumChannels()
-    fs = recording.getSamplingFrequency()
+        n_comp = recording.get_num_channels()
+    fs = recording.get_sampling_frequency()
     if verbose:
         print('Applying Online Recursive ICA')
         t_init = time.time()
-    traces = recording.getTraces().astype(dtype)
+    traces = recording.get_traces().astype(dtype)
     ori = orica.ORICA(traces, ndim=n_comp, block_size=block_size, numpass=num_pass,
-                                            forgetfac=ff, verbose=verbose)
+                      forgetfac=ff, verbose=verbose)
     if verbose:
         t_orica = time.time() - t_init
         print('ORICA completed in: ', t_orica)
 
     return ori
 
-def online_orica_alg(recording, n_comp='all', pca_window=10, ica_window=10, skew_window=5, step=1, skew_thresh=0.5,
-                               online=False, detect=True, calibPCA=True, ff='cooling', lambda_val=0.995, dtype='int16',
-                               verbose=True, detect_thresh=10, pca_block=3000, ica_block=1000):
 
+def online_orica_alg(recording, n_comp='all', pca_window=10, ica_window=10, skew_window=5, step=1, skew_thresh=0.5,
+                     online=False, detect=True, calibPCA=True, ff='cooling', lambda_val=0.995, dtype='int16',
+                     verbose=True, detect_thresh=10, pca_block=3000, ica_block=1000):
     if n_comp == 'all':
-        n_comp = recording.getNumChannels()
-    fs = recording.getSamplingFrequency()
+        n_comp = recording.get_num_channels()
+    fs = recording.get_sampling_frequency()
     if verbose:
         print('Applying Online ORICA spike sorting')
         t_init = time.time()
-    fs = recording.getSamplingFrequency()
-    traces = recording.getTraces().astype(dtype)
+    fs = recording.get_sampling_frequency()
+    traces = recording.get_traces().astype(dtype)
     ori = orica.onlineORICAss(traces, fs=fs, onlineWhitening=online, calibratePCA=calibPCA, ndim=n_comp,
                               forgetfac=ff, lambda_0=lambda_val, numpass=1, pca_block=pca_block, ica_block=ica_block,
                               step_size=step,
@@ -294,5 +296,3 @@ def online_orica_alg(recording, n_comp='all', pca_window=10, ica_window=10, skew
         print('Online ORICA completed in: ', t_orica_online)
 
     return ori
-
-

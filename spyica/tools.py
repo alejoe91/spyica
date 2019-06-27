@@ -23,6 +23,7 @@ def apply_pca(X, n_comp):
 
     return np.transpose(data), pca.components_
 
+
 def whiten_data(X, n_comp=None):
     '''
 
@@ -487,7 +488,7 @@ def cluster_spike_amplitudes(sst, metric='cal', min_sihlo=0.8, min_cal=100, max_
     -------
 
     '''
-    from sklearn.metrics import silhouette_score, calinski_harabaz_score
+    from sklearn.metrics import silhouette_score, calinski_harabasz_score
     from sklearn.cluster import KMeans
     from sklearn.mixture import GaussianMixture
     from copy import copy
@@ -521,7 +522,7 @@ def cluster_spike_amplitudes(sst, metric='cal', min_sihlo=0.8, min_cal=100, max_
 
                     if len(np.unique(labels_new)) > 1:
                         silho_new = silhouette_score(amps.reshape(-1, 1), labels_new)
-                        cal_har_new = calinski_harabaz_score(amps.reshape(-1, 1), labels_new)
+                        cal_har_new = calinski_harabasz_score(amps.reshape(-1, 1), labels_new)
                         if metric == 'silho':
                             if silho_new > silho:
                                 silho = silho_new
@@ -649,7 +650,7 @@ def cluster_spike_amplitudes(sst, metric='cal', min_sihlo=0.8, min_cal=100, max_
 
                     if len(np.unique(labels_new)) > 1:
                         silho_new = silhouette_score(wf_pca, labels_new)
-                        cal_har_new = calinski_harabaz_score(wf_pca, labels_new)
+                        cal_har_new = calinski_harabasz_score(wf_pca, labels_new)
                         if metric == 'silho':
                             if silho_new > silho:
                                 silho = silho_new

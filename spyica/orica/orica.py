@@ -829,8 +829,7 @@ def instICA(X, n_comp='all', n_chunks=1, chunk_size=None, numpass=1, block_size=
         X_reduced = X
 
     if mode == 'original':
-        orica = ORICA(X_reduced, ndim=n_comp, onlineWhitening=False, verbose=True, numpass=numpass,
-                      block_white=block_size, block_ica=block_size, adjacency=adjacency_graph, mu=mu)
+        orica = ORICA(X_reduced, ndim=n_comp, verbose=True, numpass=numpass)
     else:
         raise Exception('Unrecognized orica type')
 
