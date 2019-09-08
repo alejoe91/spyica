@@ -255,6 +255,61 @@ def online_orica_spike_sorting(recording, n_comp='all', pca_window=0, ica_window
     return sorting #, ica_spike_sources
 
 
+def ica_alg(recording, fs, clustering='mog', n_comp='all',
+            features='amp', skew_thresh=0.2, kurt_thresh=1,
+            n_chunks=0, chunk_size=0, spike_thresh=5, dtype='int16',
+            keep_all_clusters=False, verbose=True):
+    if n_comp == 'all':
+        n_comp = recording.shape[0]
+    if verbose:
+        print('Applying FastICA')
+        t_init = time.time()
+    traces = recording
+    s_ica, A_ica, W_ica = ica.instICA(traces, n_comp=n_comp, n_chunks=n_chunks, chunk_size=chunk_size)
+    if verbose:
+        t_ica = time.time() - t_init
+        print('FastICA completed in: ', t_ica)
+
+    # clean sources based on skewness and correlation
+    cleaned_sources_ica, source_idx = clean_sources(s_ica, kurt_thresh=kurt_thresh, skew_thresh=skew_thresh)
+    cleaned_A_ica = A_ica[source_idx]
+    cleaned_W_ica = W_ica[source_idx]
+
+    if verbose:
+        print('Number of cleaned sources: ', cleaned_sources_ica.shape[0])
+        print('Clustering Sources with: ', clustering)
+
+    t_start = 0 * pq.s
+    t_stop = recording.shape[1] / float(fs) * pq.s
+
+    if clustering == 'kmeans' or clustering == 'mog':
+        # detect spikes and align
+        detected_spikes = detect_and_align(cleaned_sources_ica, fs, traces,
+                                           t_start=t_start, t_stop=t_stop, n_std=spike_thresh)
+        spike_amps = [sp.annotations['ica_amp'] for sp in detected_spikes]
+        spike_trains, amps, nclusters, keep, score = \
+            cluster_spike_amplitudes(detected_spikes, metric='cal',
+                                     alg=clustering, features=features, keep_all=keep_all_clusters)
+        if verbose:
+            print('Number of spike trains after clustering: ', len(spike_trains))
+        sst, independent_spike_idx, dup = \
+            reject_duplicate_spiketrains(spike_trains, sources=cleaned_sources_ica)
+        if verbose:
+            print('Number of spike trains after duplicate rejection: ', len(sst))
+    else:
+        raise Exception("Only 'mog' and 'kmeans' clustering methods are implemented")
+
+    if 'ica_source' in sst[0].annotations.keys():
+        independent_spike_idx = [s.annotations['ica_source'] for s in sst]
+
+    ica_spike_sources_idx = source_idx[independent_spike_idx]
+    ica_spike_sources = cleaned_sources_ica[independent_spike_idx]
+    A_spike_sources = cleaned_A_ica[independent_spike_idx]
+    W_spike_sources = cleaned_W_ica[independent_spike_idx]
+
+    return ica_spike_sources, A_spike_sources, W_spike_sources
+
+
 def orica_alg(recording, n_comp='all',
               dtype='int16', block_size=800, ff='cooling', num_pass=1,
               verbose=True):
