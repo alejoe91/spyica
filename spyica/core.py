@@ -19,6 +19,8 @@ def ica_spike_sorting(recording, clustering='mog', n_comp='all',
     if not isinstance(recording, se.RecordingExtractor):
         raise Exception("Input a RecordingExtractor object!")
 
+    # TODO use random snippets (e.g. 20% of the data) / or spiky signals for fast ICA
+
     if n_comp == 'all':
         n_comp = recording.get_num_channels()
     fs = recording.get_sampling_frequency()

@@ -4,15 +4,6 @@ import numpy as np
 import quantities as pq
 from sklearn.decomposition import PCA
 
-def load(filename):
-    '''Generic loading of cPickled objects from file'''
-    import pickle
-    
-    filen = open(filename,'rb')
-    obj = pickle.load(filen)
-    filen.close()
-    return obj
-
 
 def apply_pca(X, n_comp):
     from sklearn.decomposition import PCA
@@ -51,10 +42,12 @@ def whiten_data(X, n_comp=None):
     return np.transpose(data), eigvecs, eigvals, sphere
 
 
-############ SPYICA ######################3
+############ SPYICA ######################
 
+#TODO remove neo
 
-def detect_and_align(sources, fs, recordings, t_start=None, t_stop=None, n_std=5, ref_period_ms=2, n_pad_ms=2, upsample=8):
+def detect_and_align(sources, fs, recordings, t_start=None, t_stop=None, n_std=5, ref_period_ms=2, n_pad_ms=2,
+                     upsample=8):
     '''
 
     Parameters
@@ -185,7 +178,7 @@ def detect_and_align(sources, fs, recordings, t_start=None, t_stop=None, n_std=5
 
     return spike_trains
 
-
+# todo use spikeinterfce NumpyExtractor and sorting extractor
 def extract_wf(sst, recordings, times, fs, upsample=8, ica=False, sources=[]):
     '''
 
@@ -468,7 +461,8 @@ def clean_sources(sources, kurt_thresh=0.7, skew_thresh=0.5, remove_correlated=T
 
     return spike_sources, idxs #, corr_idx, corr, mi
 
-
+# TODO use isosplit and cluster waveforms from all ICs to spot duplicates
+# TODO return IC_templates
 def cluster_spike_amplitudes(sst, metric='cal', min_sihlo=0.8, min_cal=100, max_clusters=4,
                              alg='kmeans', features='amp', ncomp=3, keep_all=False):
     '''
@@ -780,6 +774,8 @@ def cluster_spike_amplitudes(sst, metric='cal', min_sihlo=0.8, min_cal=100, max_
 
     return reduced_sst, reduced_amps, nclusters, keep_id, score
 
+def template_matching(sources, ic_templates):
+    pass
 
 def matcorr(x, y, rmmean=False, weighting=None):
     from scipy.optimize import linear_sum_assignment
