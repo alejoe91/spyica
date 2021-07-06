@@ -264,7 +264,7 @@ def ica_alg(recording, fs, clustering='mog', n_comp='all',
     if verbose:
         print('Applying FastICA')
         t_init = time.time()
-    traces = recording.get_traces().astype(dtype)
+    traces = recording.get_traces().astype(dtype).T
     s_ica, A_ica, W_ica = ica.instICA(traces, n_comp=n_comp, n_chunks=n_chunks, chunk_size=chunk_size)
     if verbose:
         t_ica = time.time() - t_init
