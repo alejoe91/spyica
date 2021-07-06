@@ -12,6 +12,57 @@ from .tools import clean_sources, cluster_spike_amplitudes, detect_and_align, \
     reject_duplicate_spiketrains, threshold_spike_sorting, find_consistent_sorces
 
 
+class Core:
+    @staticmethod
+    def ica(traces, n_comp, t_init, n_chunks=0, chunk_size=0,
+            kurt_thresh=1, skew_thresh=0.2, verbose=True):
+        if verbose:
+            print('Applying FastICA algorithm')
+
+        s_ica, A_ica, W_ica = ica.instICA(traces, n_comp=n_comp, n_chunks=n_chunks, chunk_size=chunk_size)
+        if verbose:
+            t_ica = time.time() - t_init
+            print('FastICA completed in: ', t_ica)
+
+        # clean sources based on skewness and correlation
+        cleaned_sources_ica, source_idx = clean_sources(s_ica, kurt_thresh=kurt_thresh, skew_thresh=skew_thresh)
+        cleaned_A_ica = A_ica[source_idx]
+        cleaned_W_ica = W_ica[source_idx]
+
+        if verbose:
+            print('Number of cleaned sources: ', cleaned_sources_ica.shape[0])
+
+        return cleaned_sources_ica, cleaned_A_ica, cleaned_W_ica, source_idx
+
+    @staticmethod
+    def clustering(traces, fs, cleaned_sources_ica, num_frames, clustering='mog', spike_thresh=5,
+                   keep_all_clusters=False, features='amp', verbose=True):
+        if verbose:
+            print('Clustering Sources with: ', clustering)
+
+        t_start = 0 * pq.s
+        t_stop = num_frames / float(fs) * pq.s
+
+        if clustering == 'kmeans' or clustering == 'mog':
+            # detect spikes and align
+            detected_spikes = detect_and_align(cleaned_sources_ica, fs, traces,
+                                               t_start=t_start, t_stop=t_stop, n_std=spike_thresh)
+            spike_amps = [sp.annotations['ica_amp'] for sp in detected_spikes]
+            spike_trains, amps, nclusters, keep, score = \
+                cluster_spike_amplitudes(detected_spikes, metric='cal',
+                                         alg=clustering, features=features, keep_all=keep_all_clusters)
+            if verbose:
+                print('Number of spike trains after clustering: ', len(spike_trains))
+            sst, independent_spike_idx, dup = \
+                reject_duplicate_spiketrains(spike_trains, sources=cleaned_sources_ica)
+            if verbose:
+                print('Number of spike trains after duplicate rejection: ', len(sst))
+        else:
+            raise Exception("Only 'mog' and 'kmeans' clustering methods are implemented")
+
+        return sst, independent_spike_idx
+
+
 def ica_spike_sorting(recording, clustering='mog', n_comp='all',
                       features='amp', skew_thresh=0.2, kurt_thresh=1,
                       n_chunks=0, chunk_size=0, spike_thresh=5, dtype='int16',
@@ -19,48 +70,21 @@ def ica_spike_sorting(recording, clustering='mog', n_comp='all',
     if not isinstance(recording, si.BaseRecording):
         raise Exception("Input a RecordingExtractor object!")
 
-    # TODO use random snippets (e.g. 20% of the data) / or spiky signals for fast ICA
-
     if n_comp == 'all':
         n_comp = recording.get_num_channels()
     fs = recording.get_sampling_frequency()
-    if verbose:
-        print('Applying FastICA algorithm')
-        t_init = time.time()
-    traces = recording.get_traces().astype(dtype)
-    s_ica, A_ica, W_ica = ica.instICA(traces, n_comp=n_comp, n_chunks=n_chunks, chunk_size=chunk_size)
-    if verbose:
-        t_ica = time.time() - t_init
-        print('FastICA completed in: ', t_ica)
 
-    # clean sources based on skewness and correlation
-    cleaned_sources_ica, source_idx = clean_sources(s_ica, kurt_thresh=kurt_thresh, skew_thresh=skew_thresh)
-    cleaned_A_ica = A_ica[source_idx]
-    cleaned_W_ica = W_ica[source_idx]
+    traces = recording.get_traces().astype(dtype).T
 
-    if verbose:
-        print('Number of cleaned sources: ', cleaned_sources_ica.shape[0])
-        print('Clustering Sources with: ', clustering)
+    # TODO use random snippets (e.g. 20% of the data) / or spiky signals for fast ICA
 
-    t_start = 0 * pq.s
-    t_stop = recording.get_num_frames(0) / float(fs) * pq.s
+    t_init = time.time()
+    cleaned_sources_ica, cleaned_A_ica, cleaned_W_ica, source_idx = Core.ica(traces, n_comp, t_init, n_chunks,
+                                                                             chunk_size, kurt_thresh, skew_thresh,
+                                                                             verbose)
 
-    if clustering == 'kmeans' or clustering == 'mog':
-        # detect spikes and align
-        detected_spikes = detect_and_align(cleaned_sources_ica, fs, traces,
-                                           t_start=t_start, t_stop=t_stop, n_std=spike_thresh)
-        spike_amps = [sp.annotations['ica_amp'] for sp in detected_spikes]
-        spike_trains, amps, nclusters, keep, score = \
-            cluster_spike_amplitudes(detected_spikes, metric='cal',
-                                     alg=clustering, features=features, keep_all=keep_all_clusters)
-        if verbose:
-            print('Number of spike trains after clustering: ', len(spike_trains))
-        sst, independent_spike_idx, dup = \
-            reject_duplicate_spiketrains(spike_trains, sources=cleaned_sources_ica)
-        if verbose:
-            print('Number of spike trains after duplicate rejection: ', len(sst))
-    else:
-        raise Exception("Only 'mog' and 'kmeans' clustering methods are implemented")
+    sst, independent_spike_idx = Core.clustering(traces, fs, cleaned_sources_ica, recording.get_num_frames(0),
+                                                 clustering, spike_thresh, keep_all_clusters, features, verbose)
 
     if 'ica_source' in sst[0].annotations.keys():
         independent_spike_idx = [s.annotations['ica_source'] for s in sst]
@@ -84,7 +108,7 @@ def ica_spike_sorting(recording, clustering='mog', n_comp='all',
 
     # TODO add spike properties and features
 
-    return sorting #, cleaned_sources_ica
+    return sorting  # , cleaned_sources_ica
 
 
 def orica_spike_sorting(recording, clustering='mog', n_comp='all',
@@ -157,7 +181,7 @@ def orica_spike_sorting(recording, clustering='mog', n_comp='all',
     sorting.set_times_labels(times, labels)
     sorting.set_sampling_frequency(recording.get_sampling_frequency)
 
-    return sorting #, ica_spike_sources
+    return sorting  # , ica_spike_sources
 
 
 def online_orica_spike_sorting(recording, n_comp='all', pca_window=0, ica_window=0, skew_window=5, step=1,
@@ -252,19 +276,22 @@ def online_orica_spike_sorting(recording, n_comp='all', pca_window=0, ica_window
     sorting.set_times_labels(times, labels)
     sorting.set_sampling_frequency(recording.get_sampling_frequency)
 
-    return sorting #, ica_spike_sources
+    return sorting  # , ica_spike_sources
 
 
-def ica_alg(recording, fs, clustering='mog', n_comp='all',
+def ica_alg(recording, clustering='mog', n_comp='all',
             features='amp', skew_thresh=0.2, kurt_thresh=1,
             n_chunks=0, chunk_size=0, spike_thresh=5, dtype='int16',
             keep_all_clusters=False, verbose=True):
     if n_comp == 'all':
         n_comp = recording.get_num_channels()
+
+    fs = recording.get_sampling_frequency()
+
     if verbose:
         print('Applying FastICA')
         t_init = time.time()
-    traces = recording.get_traces().astype(dtype)
+    traces = recording.get_traces().astype(dtype).T
     s_ica, A_ica, W_ica = ica.instICA(traces, n_comp=n_comp, n_chunks=n_chunks, chunk_size=chunk_size)
     if verbose:
         t_ica = time.time() - t_init

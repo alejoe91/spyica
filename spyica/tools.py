@@ -487,7 +487,7 @@ def cluster_spike_amplitudes(sst, metric='cal', min_sihlo=0.8, min_cal=100, max_
     from sklearn.mixture import GaussianMixture
     from copy import copy
 
-    spike_wf = np.array([sp.annotations['ica_wf'] for sp in sst])
+    spike_wf = np.array([sp.annotations['ica_wf'] for sp in sst], dtype=object)
     spike_amps = [sp.annotations['ica_amp'] for sp in sst]
     nclusters = np.zeros(len(spike_amps))
     silhos = np.zeros(len(spike_amps))
