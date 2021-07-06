@@ -4,7 +4,7 @@ import neo
 import numpy as np
 import quantities as pq
 import scipy.stats as stats
-import spikeextractors  as se
+import spikeinterface as si
 import spyica.ica as ica
 import spyica.orica as orica
 
@@ -16,7 +16,7 @@ def ica_spike_sorting(recording, clustering='mog', n_comp='all',
                       features='amp', skew_thresh=0.2, kurt_thresh=1,
                       n_chunks=0, chunk_size=0, spike_thresh=5, dtype='int16',
                       keep_all_clusters=False, verbose=True):
-    if not isinstance(recording, se.RecordingExtractor):
+    if not isinstance(recording, si.BaseRecording):
         raise Exception("Input a RecordingExtractor object!")
 
     # TODO use random snippets (e.g. 20% of the data) / or spiky signals for fast ICA
@@ -43,7 +43,7 @@ def ica_spike_sorting(recording, clustering='mog', n_comp='all',
         print('Clustering Sources with: ', clustering)
 
     t_start = 0 * pq.s
-    t_stop = recording.get_num_frames() / float(fs) * pq.s
+    t_stop = recording.get_num_frames(0) / float(fs) * pq.s
 
     if clustering == 'kmeans' or clustering == 'mog':
         # detect spikes and align
@@ -74,15 +74,13 @@ def ica_spike_sorting(recording, clustering='mog', n_comp='all',
     if verbose:
         print('Elapsed time: ', processing_time)
 
-    sorting = se.NumpySortingExtractor()
-    times = np.array([])
+    times = np.array([], dtype=int)
     labels = np.array([])
     for i_s, st in enumerate(sst):
         times = np.concatenate((times, (st.times.magnitude * fs).astype(int)))
         labels = np.concatenate((labels, np.array([i_s + 1] * len(st.times))))
 
-    sorting.set_times_labels(times, labels)
-    sorting.set_sampling_frequency(recording.get_sampling_frequency)
+    sorting = si.NumpySorting.from_times_labels(times.astype(int), labels, recording.get_sampling_frequency())
 
     # TODO add spike properties and features
 
