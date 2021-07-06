@@ -80,7 +80,7 @@ def ica_spike_sorting(recording, clustering='mog', n_comp='all',
         times = np.concatenate((times, (st.times.magnitude * fs).astype(int)))
         labels = np.concatenate((labels, np.array([i_s + 1] * len(st.times))))
 
-    sorting = si.NumpySorting.from_times_labels(times.astype(int), labels, recording.get_sampling_frequency())
+    sorting = si.NumpySorting.from_times_labels(times.astype(int), labels, fs)
 
     # TODO add spike properties and features
 
@@ -260,11 +260,11 @@ def ica_alg(recording, fs, clustering='mog', n_comp='all',
             n_chunks=0, chunk_size=0, spike_thresh=5, dtype='int16',
             keep_all_clusters=False, verbose=True):
     if n_comp == 'all':
-        n_comp = recording.shape[0]
+        n_comp = recording.get_num_channels()
     if verbose:
         print('Applying FastICA')
         t_init = time.time()
-    traces = recording
+    traces = recording.get_traces().astype(dtype)
     s_ica, A_ica, W_ica = ica.instICA(traces, n_comp=n_comp, n_chunks=n_chunks, chunk_size=chunk_size)
     if verbose:
         t_ica = time.time() - t_init
@@ -280,7 +280,7 @@ def ica_alg(recording, fs, clustering='mog', n_comp='all',
         print('Clustering Sources with: ', clustering)
 
     t_start = 0 * pq.s
-    t_stop = recording.shape[1] / float(fs) * pq.s
+    t_stop = recording.get_num_frames(0) / float(fs) * pq.s
 
     if clustering == 'kmeans' or clustering == 'mog':
         # detect spikes and align
