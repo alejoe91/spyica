@@ -4,19 +4,19 @@ import neo
 import numpy as np
 import quantities as pq
 import scipy.stats as stats
-import spikeinterface as si
 import spyica.orica as orica
 import spyica.SpyICASorter as ss
 
-from .tools import clean_sources, cluster_spike_amplitudes, detect_and_align, \
-    reject_duplicate_spiketrains, threshold_spike_sorting, find_consistent_sorces
+from spikeinterface import BaseRecording
+from .tools import detect_and_align, reject_duplicate_spiketrains, \
+    threshold_spike_sorting, find_consistent_sorces
 
 
 def ica_spike_sorting(recording, clustering='mog', n_comp='all',
                       features='amp', skew_thresh=0.2, kurt_thresh=1,
                       n_chunks=0, chunk_size=0, spike_thresh=5, dtype='int16',
                       keep_all_clusters=False, verbose=True):
-    if not isinstance(recording, si.BaseRecording):
+    if not isinstance(recording, BaseRecording):
         raise Exception("Input a RecordingExtractor object!")
 
     if n_comp == 'all':
@@ -58,6 +58,9 @@ def orica_spike_sorting(recording, clustering='mog', n_comp='all',
                         n_chunks=0, chunk_size=0, spike_thresh=5, dtype='int16',
                         keep_all_clusters=False, block_size=800, ff='cooling', num_pass=1,
                         verbose=True):
+    if not isinstance(recording, BaseRecording):
+        raise Exception("Input a RecordingExtractor object!")
+
     if n_comp == 'all':
         n_comp = recording.get_num_channels()
     fs = recording.get_sampling_frequency()
@@ -97,6 +100,9 @@ def online_orica_spike_sorting(recording, n_comp='all', pca_window=0, ica_window
                                verbose=True, detect_thresh=10, white_mode='pca', pca_block=2000,
                                ica_block=800):
     import matplotlib.pylab as plt
+
+    if not isinstance(recording, BaseRecording):
+        raise Exception("Input a RecordingExtractor object!")
 
     if n_comp == 'all':
         n_comp = recording.get_num_channels()
@@ -182,6 +188,9 @@ def ica_alg(recording, clustering='mog', n_comp='all',
             features='amp', skew_thresh=0.2, kurt_thresh=1,
             n_chunks=0, chunk_size=0, spike_thresh=5, dtype='int16',
             keep_all_clusters=False, verbose=True):
+    if not isinstance(recording, BaseRecording):
+        raise Exception("Input a RecordingExtractor object!")
+
     if n_comp == 'all':
         n_comp = recording.get_num_channels()
 
@@ -211,6 +220,9 @@ def ica_alg(recording, clustering='mog', n_comp='all',
 def orica_alg(recording, n_comp='all',
               dtype='int16', block_size=800, ff='cooling', num_pass=1,
               verbose=True):
+    if not isinstance(recording, BaseRecording):
+        raise Exception("Input a RecordingExtractor object!")
+
     if n_comp == 'all':
         n_comp = recording.get_num_channels()
 
@@ -230,6 +242,9 @@ def orica_alg(recording, n_comp='all',
 def online_orica_alg(recording, n_comp='all', pca_window=10, ica_window=10, skew_window=5, step=1, skew_thresh=0.5,
                      online=False, detect=True, calibPCA=True, ff='cooling', lambda_val=0.995, dtype='int16',
                      verbose=True, detect_thresh=10, pca_block=3000, ica_block=1000):
+    if not isinstance(recording, BaseRecording):
+        raise Exception("Input a RecordingExtractor object!")
+
     if n_comp == 'all':
         n_comp = recording.get_num_channels()
     fs = recording.get_sampling_frequency()

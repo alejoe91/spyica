@@ -5,8 +5,8 @@ import quantities as pq
 import numpy as np
 import spyica.ica as ica
 import spyica.orica as orica
-import spikeinterface as si
 
+from spikeinterface import NumpySorting
 from spyica.tools import clean_sources, cluster_spike_amplitudes, detect_and_align, \
     reject_duplicate_spiketrains
 
@@ -81,4 +81,4 @@ def set_times_labels(sst, fs):
         times = np.concatenate((times, (st.times.magnitude * fs).astype(int)))
         labels = np.concatenate((labels, np.array([i_s + 1] * len(st.times))))
 
-    return si.NumpySorting.from_times_labels(times.astype(int), labels, fs)
+    return NumpySorting.from_times_labels(times.astype(int), labels, fs)
