@@ -141,7 +141,7 @@ def mask_traces(recording, traces, fs, sample_window_ms=2,
             for chan in np.arange(num_channels):
                 occurrences = list(peaks['channel_ind']).count(chan)
                 num_samples = occurrences * percent_spikes
-                idxs = [i for (i, ind) in enumerate(peaks['channel_ind']) if ind == chan]
+                idxs = np.where(peaks['channel_ind'] == chan)[0]
                 idxs = np.random.choice(idxs, int(num_samples))
                 final_idxs.extend(list(idxs))
             final_idxs = sorted(final_idxs)
