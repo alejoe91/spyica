@@ -15,24 +15,30 @@ from .tools import detect_and_align, reject_duplicate_spiketrains, \
 def ica_spike_sorting(recording, clustering='mog', n_comp='all',
                       features='amp', skew_thresh=0.2, kurt_thresh=1,
                       n_chunks=0, chunk_size=0, spike_thresh=5, dtype='int16',
-                      keep_all_clusters=False, verbose=True):
+                      keep_all_clusters=False, sample_window_ms=2, percent_spikes=None,
+                      balance_spikes_on_channel=False, max_num_spikes=None, verbose=True):
     if not isinstance(recording, BaseRecording):
         raise Exception("Input a RecordingExtractor object!")
 
     if n_comp == 'all':
         n_comp = recording.get_num_channels()
     fs = recording.get_sampling_frequency()
-
     traces = recording.get_traces().astype(dtype).T
+    cut_traces, idx, peaks = ss.mask_traces(recording, traces, fs, sample_window_ms=sample_window_ms,
+                                            max_num_spikes=max_num_spikes, percent_spikes=percent_spikes,
+                                            balance_spikes_on_channel=balance_spikes_on_channel)
 
     t_init = time.time()
-    cleaned_sources_ica, cleaned_A_ica, cleaned_W_ica, source_idx = \
-        ss.clean_ica(traces, n_comp, t_init, n_chunks=n_chunks,
-                     chunk_size=chunk_size, kurt_thresh=kurt_thresh,
-                     skew_thresh=skew_thresh, verbose=verbose)
+    scut_ica, A_ica, W_ica = \
+        ss.compute_ica(cut_traces, n_comp, t_init, n_chunks=n_chunks, chunk_size=chunk_size, verbose=verbose)
 
-    sst, independent_spike_idx = ss.clustering(traces, fs, cleaned_sources_ica, recording.get_num_frames(0),
-                                               clustering, spike_thresh, keep_all_clusters, features, verbose)
+    s_ica = np.matmul(W_ica, traces)
+
+    cleaned_sources_ica, cleaned_A_ica, cleaned_W_ica, source_idx = \
+        ss.clean_sources_ica(s_ica, A_ica, W_ica, kurt_thresh=kurt_thresh, skew_thresh=skew_thresh, verbose= verbose)
+
+    sst, independent_spike_idx = ss.cluster(traces, fs, cleaned_sources_ica, recording.get_num_frames(0),
+                                            clustering, spike_thresh, keep_all_clusters, features, verbose)
 
     if 'ica_source' in sst[0].annotations.keys():
         independent_spike_idx = [s.annotations['ica_source'] for s in sst]
@@ -70,12 +76,11 @@ def orica_spike_sorting(recording, clustering='mog', n_comp='all',
     t_init = time.time()
 
     cleaned_sources_orica, cleaned_A_orica, cleaned_W_orica, source_idx = \
-        ss.clean_ica(traces, n_comp, t_init, ica_alg='orica', n_chunks=n_chunks,
-                     chunk_size=chunk_size, kurt_thresh=kurt_thresh, skew_thresh=skew_thresh,
-                     num_pass=num_pass, block_size=block_size, verbose=verbose)
+        ss.compute_ica(n_comp, t_init, ica_alg='orica', n_chunks=n_chunks, chunk_size=chunk_size, num_pass=num_pass,
+                       block_size=block_size, verbose=verbose)
 
-    sst, independent_spike_idx = ss.clustering(traces, fs, cleaned_sources_orica, recording.get_num_frames(0),
-                                               clustering, spike_thresh, keep_all_clusters, features, verbose)
+    sst, independent_spike_idx = ss.cluster(traces, fs, cleaned_sources_orica, recording.get_num_frames(0),
+                                            clustering, spike_thresh, keep_all_clusters, features, verbose)
 
     if 'ica_source' in sst[0].annotations.keys():
         independent_spike_idx = [s.annotations['ica_source'] for s in sst]
@@ -199,11 +204,9 @@ def ica_alg(recording, clustering='mog', n_comp='all',
     t_init = time.time()
 
     cleaned_sources_ica, cleaned_A_ica, cleaned_W_ica, source_idx = \
-        ss.clean_ica(traces, n_comp, t_init, n_chunks=n_chunks,
-                     chunk_size=chunk_size, kurt_thresh=kurt_thresh,
-                     skew_thresh=skew_thresh, verbose=verbose)
+        ss.compute_ica(n_comp, t_init, n_chunks=n_chunks, chunk_size=chunk_size, verbose=verbose)
 
-    sst, independent_spike_idx = ss.clustering(traces, fs, cleaned_sources_ica, recording.get_num_frames(0),
+    sst, independent_spike_idx = ss.cluster(traces, fs, cleaned_sources_ica, recording.get_num_frames(0),
                                                clustering, spike_thresh, keep_all_clusters, features, verbose)
 
     if 'ica_source' in sst[0].annotations.keys():
