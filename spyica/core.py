@@ -16,47 +16,57 @@ def ica_spike_sorting(recording, clustering='mog', n_comp='all',
                       features='amp', skew_thresh=0.2, kurt_thresh=1,
                       n_chunks=0, chunk_size=0, spike_thresh=5, dtype='int16',
                       keep_all_clusters=False, sample_window_ms=2, percent_spikes=None,
-                      balance_spikes_on_channel=False, max_num_spikes=None, verbose=True):
+                      balance_spikes_on_channel=False, max_num_spikes=None, verbose=True,
+                      use_lambda=True, max_iter=200, clean_before=False, method='old'):
     if not isinstance(recording, BaseRecording):
         raise Exception("Input a RecordingExtractor object!")
 
     if n_comp == 'all':
         n_comp = recording.get_num_channels()
-    fs = recording.get_sampling_frequency()
-    traces = recording.get_traces().astype(dtype).T
-    cut_traces, idx, peaks = ss.mask_traces(recording, traces, fs, sample_window_ms=sample_window_ms,
-                                            max_num_spikes=max_num_spikes, percent_spikes=percent_spikes,
-                                            balance_spikes_on_channel=balance_spikes_on_channel)
+
+    sorter = ss.SpyICASorter(recording)
+    sorter.mask_traces(sample_window_ms=sample_window_ms, percent_spikes=percent_spikes,
+                       balance_spikes_on_channel=balance_spikes_on_channel,
+                       max_num_spikes=max_num_spikes,
+                       use_lambda=use_lambda)
 
     t_init = time.time()
-    scut_ica, A_ica, W_ica = \
-        ss.compute_ica(cut_traces, n_comp, t_init, n_chunks=n_chunks, chunk_size=chunk_size, verbose=verbose)
+    sorter.compute_ica(n_comp, n_chunks=n_chunks, chunk_size=chunk_size,
+                       verbose=verbose, max_iter=max_iter)
+    if verbose:
+        t_ica = time.time() - t_init
+        print('FastICA completed in: ', t_ica)
 
-    s_ica = np.matmul(W_ica, traces)
+    if clean_before:
+        sorter.clean_sources_ica(kurt_thresh=kurt_thresh, skew_thresh=skew_thresh, verbose=verbose)
+        traces = recording.get_traces(channel_ids=[str(x+1) for x in sorter.source_idx]).astype(dtype).T
+        sorter.cleaned_sources_ica = np.matmul(sorter.cleaned_W_ica, traces)
+    else:
+        traces = recording.get_traces().astype(dtype).T
+        sorter.s_ica = np.matmul(sorter.W_ica, traces)
 
-    cleaned_sources_ica, cleaned_A_ica, cleaned_W_ica, source_idx = \
-        ss.clean_sources_ica(s_ica, A_ica, W_ica, kurt_thresh=kurt_thresh, skew_thresh=skew_thresh, verbose= verbose)
+        sorter.clean_sources_ica(method=method, kurt_thresh=kurt_thresh, skew_thresh=skew_thresh, verbose=verbose)
 
-    sst, independent_spike_idx = ss.cluster(traces, fs, cleaned_sources_ica, recording.get_num_frames(0),
-                                            clustering, spike_thresh, keep_all_clusters, features, verbose)
+    sorter.cluster(recording.get_num_frames(0),
+                   clustering, spike_thresh, keep_all_clusters, features, verbose)
 
-    if 'ica_source' in sst[0].annotations.keys():
-        independent_spike_idx = [s.annotations['ica_source'] for s in sst]
+    if 'ica_source' in sorter.sst[0].annotations.keys():
+        sorter.independent_spike_idx = [s.annotations['ica_source'] for s in sorter.sst]
 
-    ica_spike_sources_idx = source_idx[independent_spike_idx]
-    ica_spike_sources = cleaned_sources_ica[independent_spike_idx]
-    A_spike_sources = cleaned_A_ica[independent_spike_idx]
-    W_spike_sources = cleaned_W_ica[independent_spike_idx]
+    ica_spike_sources_idx = sorter.source_idx[sorter.independent_spike_idx]
+    ica_spike_sources = sorter.cleaned_sources_ica[sorter.independent_spike_idx]
+    A_spike_sources = sorter.cleaned_A_ica[sorter.independent_spike_idx]
+    W_spike_sources = sorter.cleaned_W_ica[sorter.independent_spike_idx]
 
     processing_time = time.time() - t_init
     if verbose:
         print('Elapsed time: ', processing_time)
 
-    sorting = ss.set_times_labels(sst, fs)
+    sorting = sorter.set_times_labels()
 
     # TODO add spike properties and features
 
-    return sorting  # , cleaned_sources_ica
+    return sorting, sorter  # , cleaned_sources_ica
 
 
 def orica_spike_sorting(recording, clustering='mog', n_comp='all',
@@ -76,8 +86,11 @@ def orica_spike_sorting(recording, clustering='mog', n_comp='all',
     t_init = time.time()
 
     cleaned_sources_orica, cleaned_A_orica, cleaned_W_orica, source_idx = \
-        ss.compute_ica(n_comp, t_init, ica_alg='orica', n_chunks=n_chunks, chunk_size=chunk_size, num_pass=num_pass,
+        ss.compute_ica(traces, n_comp, ica_alg='orica', n_chunks=n_chunks, chunk_size=chunk_size, num_pass=num_pass,
                        block_size=block_size, verbose=verbose)
+    if verbose:
+        t_ica = time.time() - t_init
+        print('ORICA completed in:', t_ica)
 
     sst, independent_spike_idx = ss.cluster(traces, fs, cleaned_sources_orica, recording.get_num_frames(0),
                                             clustering, spike_thresh, keep_all_clusters, features, verbose)
@@ -206,8 +219,12 @@ def ica_alg(recording, clustering='mog', n_comp='all',
     cleaned_sources_ica, cleaned_A_ica, cleaned_W_ica, source_idx = \
         ss.compute_ica(n_comp, t_init, n_chunks=n_chunks, chunk_size=chunk_size, verbose=verbose)
 
+    if verbose:
+        t_ica = time.time() - t_init
+        print('ICA completed in:', t_ica)
+
     sst, independent_spike_idx = ss.cluster(traces, fs, cleaned_sources_ica, recording.get_num_frames(0),
-                                               clustering, spike_thresh, keep_all_clusters, features, verbose)
+                                            clustering, spike_thresh, keep_all_clusters, features, verbose)
 
     if 'ica_source' in sst[0].annotations.keys():
         independent_spike_idx = [s.annotations['ica_source'] for s in sst]

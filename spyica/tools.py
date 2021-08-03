@@ -1,4 +1,5 @@
 # Helper functions
+from __future__ import division
 
 import numpy as np
 import quantities as pq
@@ -28,7 +29,7 @@ def whiten_data(X, n_comp=None):
 
     '''
     # whiten data
-    if n_comp==None:
+    if n_comp == None:
         n_comp = np.min(X.shape)
 
     n_feat, n_samples = X.shape
@@ -44,7 +45,7 @@ def whiten_data(X, n_comp=None):
 
 ############ SPYICA ######################
 
-#TODO remove neo
+# TODO remove neo
 
 def detect_and_align(sources, fs, recordings, t_start=None, t_stop=None, n_std=5, ref_period_ms=2, n_pad_ms=2,
                      upsample=8):
@@ -88,95 +89,97 @@ def detect_and_align(sources, fs, recordings, t_start=None, t_stop=None, n_std=5
         sp_amp = []
         first_spike = True
 
-        for i_t, t in enumerate(intervals):
-            idx = idx_spike[i_t]
-            if t > 1 or i_t == len(intervals)-1:
-                if idx - n_pad > 0 and idx + n_pad < len(s):
-                    spike = s[idx - n_pad:idx + n_pad]
-                    # t_spike = times[idx - n_pad:idx + n_pad]
-                    t_spike = np.arange(idx - n_pad, idx + n_pad)
-                    spike_rec = recordings[:, idx - n_pad:idx + n_pad]
-                elif idx - n_pad < 0:
-                    spike = s[:idx + n_pad]
-                    spike = np.pad(spike, (np.abs(idx - n_pad), 0), 'constant')
-                    # t_spike = times[:idx + n_pad]
-                    t_spike = np.arange(idx + n_pad)
-                    t_spike = np.pad(t_spike, (np.abs(idx - n_pad), 0), 'constant')
-                    spike_rec = recordings[:, :idx + n_pad]
-                    spike_rec = np.pad(spike_rec, ((0, 0), (np.abs(idx - n_pad), 0)), 'constant')
-                elif idx + n_pad > len(s):
-                    spike = s[idx - n_pad:]
-                    spike = np.pad(spike, (0, idx + n_pad - len(s)), 'constant')
-                    # t_spike = times[idx - n_pad:]
-                    t_spike = np.arange(idx - n_pad, sources.shape[1])
-                    t_spike = np.pad(t_spike, (0, idx + n_pad - len(s)), 'constant')
-                    spike_rec = recordings[:, idx - n_pad:]
-                    spike_rec = np.pad(spike_rec, ((0, 0), (0, idx + n_pad - len(s))), 'constant')
+        if idx_spike.shape[0] > 1:
+            for i_t, t in enumerate(intervals):
+                idx = idx_spike[i_t]
+                if t > 1 or i_t == len(intervals) - 1:
+                    if idx - n_pad > 0 and idx + n_pad < len(s):
+                        spike = s[idx - n_pad:idx + n_pad]
+                        # t_spike = times[idx - n_pad:idx + n_pad]
+                        t_spike = np.arange(idx - n_pad, idx + n_pad)
+                        spike_rec = recordings[:, idx - n_pad:idx + n_pad]
+                    elif idx - n_pad < 0:
+                        spike = s[:idx + n_pad]
+                        spike = np.pad(spike, (np.abs(idx - n_pad), 0), 'constant')
+                        # t_spike = times[:idx + n_pad]
+                        t_spike = np.arange(idx + n_pad)
+                        t_spike = np.pad(t_spike, (np.abs(idx - n_pad), 0), 'constant')
+                        spike_rec = recordings[:, :idx + n_pad]
+                        spike_rec = np.pad(spike_rec, ((0, 0), (np.abs(idx - n_pad), 0)), 'constant')
+                    elif idx + n_pad > len(s):
+                        spike = s[idx - n_pad:]
+                        spike = np.pad(spike, (0, idx + n_pad - len(s)), 'constant')
+                        # t_spike = times[idx - n_pad:]
+                        t_spike = np.arange(idx - n_pad, sources.shape[1])
+                        t_spike = np.pad(t_spike, (0, idx + n_pad - len(s)), 'constant')
+                        spike_rec = recordings[:, idx - n_pad:]
+                        spike_rec = np.pad(spike_rec, ((0, 0), (0, idx + n_pad - len(s))), 'constant')
 
-                if first_spike:
-                    nsamples = len(spike)
-                    nsamples_up = nsamples*upsample
-                    first_spike = False
+                    if first_spike:
+                        nsamples = len(spike)
+                        nsamples_up = nsamples * upsample
+                        first_spike = False
 
-                # upsample and find minimum
-                if upsample > 1:
-                    spike_up = ss.resample_poly(spike, upsample, 1)
-                    # times_up = ss.resample_poly(t_spike, upsample, 1
-                    t_spike_up = np.linspace(t_spike[0], t_spike[-1], num=len(spike_up))
-                else:
-                    spike_up = spike
-                    t_spike_up = t_spike
+                    # upsample and find minimum
+                    if upsample > 1:
+                        spike_up = ss.resample_poly(spike, upsample, 1)
+                        # times_up = ss.resample_poly(t_spike, upsample, 1
+                        t_spike_up = np.linspace(t_spike[0], t_spike[-1], num=len(spike_up))
+                    else:
+                        spike_up = spike
+                        t_spike_up = t_spike
 
-                min_idx_up = np.argmin(spike_up)
-                min_amp_up = np.min(spike_up)
-                min_time_up = t_spike_up[min_idx_up]
+                    min_idx_up = np.argmin(spike_up)
+                    min_amp_up = np.min(spike_up)
+                    min_time_up = t_spike_up[min_idx_up]
 
-                min_idx = np.argmin(spike)
-                min_amp = np.min(spike)
-                min_time = t_spike[min_idx]
+                    min_idx = np.argmin(spike)
+                    min_amp = np.min(spike)
+                    min_time = t_spike[min_idx]
 
-                # align waveform
-                shift = nsamples_up//2 - min_idx_up
-                if shift > 0:
-                    spike_up = np.pad(spike_up, (np.abs(shift), 0), 'constant')[:nsamples_up]
-                elif shift < 0:
-                    spike_up = np.pad(spike_up, (0, np.abs(shift)), 'constant')[-nsamples_up:]
+                    # align waveform
+                    shift = nsamples_up // 2 - min_idx_up
+                    if shift > 0:
+                        spike_up = np.pad(spike_up, (np.abs(shift), 0), 'constant')[:nsamples_up]
+                    elif shift < 0:
+                        spike_up = np.pad(spike_up, (0, np.abs(shift)), 'constant')[-nsamples_up:]
 
-                if len(sp_times) != 0:
-                    # print(min_time_up, sp_times[-1])
-                    if min_time_up - sp_times[-1] > ref_period:
+                    if len(sp_times) != 0:
+                        # print(min_time_up, sp_times[-1])
+                        if min_time_up - sp_times[-1] > ref_period:
+                            sp_wf.append(spike_up)
+                            sp_rec_wf.append(spike_rec)
+                            sp_amp.append(min_amp_up)
+                            sp_times.append(min_time_up)
+                    else:
                         sp_wf.append(spike_up)
                         sp_rec_wf.append(spike_rec)
                         sp_amp.append(min_amp_up)
                         sp_times.append(min_time_up)
-                else:
-                    sp_wf.append(spike_up)
-                    sp_rec_wf.append(spike_rec)
-                    sp_amp.append(min_amp_up)
-                    sp_times.append(min_time_up)
 
-        if t_start and t_stop:
-            for i, sp in enumerate(sp_times):
-                if sp < t_start.rescale('s').magnitude * fs:
-                    sp_times[i] = t_start.rescale('s').magnitude * fs
-                if  sp > t_stop.rescale('s').magnitude * fs:
-                    sp_times[i] = t_stop.rescale('s').magnitude * fs
-        elif t_stop:
-            for i, sp in enumerate(sp_times):
-                if  sp > t_stop.rescale('s').magnitude * fs:
-                    sp_times[i] = t_stop.rescale('s').magnitude * fs
-        else:
-            t_start = 0 * pq.s
-            t_stop = sp_times[-1] / fs * pq.s
+            if t_start and t_stop:
+                for i, sp in enumerate(sp_times):
+                    if sp < t_start.rescale('s').magnitude * fs:
+                        sp_times[i] = t_start.rescale('s').magnitude * fs
+                    if sp > t_stop.rescale('s').magnitude * fs:
+                        sp_times[i] = t_stop.rescale('s').magnitude * fs
+            elif t_stop:
+                for i, sp in enumerate(sp_times):
+                    if sp > t_stop.rescale('s').magnitude * fs:
+                        sp_times[i] = t_stop.rescale('s').magnitude * fs
+            else:
+                t_start = 0 * pq.s
+                t_stop = sp_times[-1] / fs * pq.s
 
-        spiketrain = neo.SpikeTrain(np.array(sp_times) / fs * pq.s, t_start=t_start, t_stop=t_stop,
-                                    waveforms=np.array(sp_rec_wf))
-        spiketrain.annotate(ica_amp=np.array(sp_amp))
-        spiketrain.annotate(ica_wf=np.array(sp_wf))
-        spike_trains.append(spiketrain)
-        idx_sources.append(s_idx)
+            spiketrain = neo.SpikeTrain(np.array(sp_times) / fs * pq.s, t_start=t_start, t_stop=t_stop,
+                                        waveforms=np.array(sp_rec_wf))
+            spiketrain.annotate(ica_amp=np.array(sp_amp))
+            spiketrain.annotate(ica_wf=np.array(sp_wf))
+            spike_trains.append(spiketrain)
+            idx_sources.append(s_idx)
 
     return spike_trains
+
 
 # todo use spikeinterfce NumpyExtractor and sorting extractor
 def extract_wf(sst, recordings, times, fs, upsample=8, ica=False, sources=[]):
@@ -213,7 +216,7 @@ def extract_wf(sst, recordings, times, fs, upsample=8, ica=False, sources=[]):
             first_spike = True
 
             for t in st:
-                idx = np.where(times>t)[0][0]
+                idx = np.where(times > t)[0][0]
                 # find single waveforms crossing thresholds
                 if idx - n_pad > 0 and idx + n_pad < nPts:
                     spike = s[idx - n_pad:idx + n_pad]
@@ -236,7 +239,7 @@ def extract_wf(sst, recordings, times, fs, upsample=8, ica=False, sources=[]):
 
                 if first_spike:
                     nsamples = len(spike)
-                    nsamples_up = nsamples*upsample
+                    nsamples_up = nsamples * upsample
                     first_spike = False
 
                 min_ic_amp = np.min(spike)
@@ -345,7 +348,7 @@ def reject_duplicate_spiketrains(sst, percent_threshold=0.5, min_spikes=3, sourc
                     idx_sources.append(i)
             else:
                 # Keep spike train with largest number of spikes among duplicates
-                idxs = np.argwhere(duplicates==i)
+                idxs = np.argwhere(duplicates == i)
                 max_len = []
                 c_max = 0
                 st_idx = []
@@ -372,7 +375,7 @@ def reject_duplicate_spiketrains(sst, percent_threshold=0.5, min_spikes=3, sourc
     return spike_trains, idx_sources, duplicates
 
 
-def find_duplicates(i, sp_times, sst, percent_threshold=0.5, t_jitt=1*pq.ms):
+def find_duplicates(i, sp_times, sst, percent_threshold=0.5, t_jitt=1 * pq.ms):
     counts = []
     duplicates = []
     for j, sp in enumerate(sst):
@@ -396,8 +399,8 @@ def clean_sources(sources, kurt_thresh=0.7, skew_thresh=0.5, remove_correlated=T
 
     Parameters
     ----------
-    s
-    corr_thresh
+    sources
+    kurt_thresh
     skew_thresh
 
     Returns
@@ -459,7 +462,8 @@ def clean_sources(sources, kurt_thresh=0.7, skew_thresh=0.5, remove_correlated=T
     # invert sources with positive skewness
     spike_sources[sk_sp > 0] = -spike_sources[sk_sp > 0]
 
-    return spike_sources, idxs #, corr_idx, corr, mi
+    return spike_sources, idxs  # , corr_idx, corr, mi
+
 
 # TODO use isosplit and cluster waveforms from all ICs to spot duplicates
 # TODO return IC_templates
@@ -505,11 +509,11 @@ def cluster_spike_amplitudes(sst, metric='cal', min_sihlo=0.8, min_cal=100, max_
 
             if len(amps) > 2:
                 for k in range(2, max_clusters):
-                    if alg=='kmeans':
+                    if alg == 'kmeans':
                         kmeans_new = KMeans(n_clusters=k, random_state=0)
                         kmeans_new.fit(amps.reshape(-1, 1))
                         labels_new = kmeans_new.predict(amps.reshape(-1, 1))
-                    elif alg=='mog':
+                    elif alg == 'mog':
                         gmm_new = GaussianMixture(n_components=k, covariance_type='full')
                         gmm_new.fit(amps.reshape(-1, 1))
                         labels_new = gmm_new.predict(amps.reshape(-1, 1))
@@ -527,7 +531,7 @@ def cluster_spike_amplitudes(sst, metric='cal', min_sihlo=0.8, min_cal=100, max_
                                     gmm = gmm_new
                                 labels = labels_new
                             else:
-                                keep_going=False
+                                keep_going = False
                         elif metric == 'cal':
                             if cal_har_new > cal_har:
                                 cal_har = cal_har_new
@@ -538,9 +542,9 @@ def cluster_spike_amplitudes(sst, metric='cal', min_sihlo=0.8, min_cal=100, max_
                                     gmm = gmm_new
                                 labels = labels_new
                             else:
-                                keep_going=False
+                                keep_going = False
                     else:
-                        keep_going=False
+                        keep_going = False
                         nclusters[i] = 1
 
                     if not keep_going:
@@ -562,7 +566,7 @@ def cluster_spike_amplitudes(sst, metric='cal', min_sihlo=0.8, min_cal=100, max_
                                     keep_id.append(idxs)
                             else:
                                 highest_clust = np.argmin(kmeans.cluster_centers_)
-                                highest_idx = np.where(labels==highest_clust)[0]
+                                highest_idx = np.where(labels == highest_clust)[0]
                                 reduced_sst.append(sst[i][highest_idx])
                                 reduced_amps.append(amps[highest_idx])
                                 keep_id.append(highest_idx)
@@ -593,16 +597,17 @@ def cluster_spike_amplitudes(sst, metric='cal', min_sihlo=0.8, min_cal=100, max_
                                 elif alg == 'mog':
                                     highest_clust = np.argmin(gmm.means_)
                                 idxs = np.where(labels == highest_clust)[0]
-                                red_spikes = sst[i][idxs]
-                                red_spikes.annotations = copy(sst[i][idxs].annotations)
-                                if 'ica_amp' in red_spikes.annotations:
-                                    red_spikes.annotate(ica_amp=red_spikes.annotations['ica_amp'][idxs])
-                                if 'ica_wf' in red_spikes.annotations:
-                                    red_spikes.annotate(ica_wf=red_spikes.annotations['ica_wf'][idxs])
-                                red_spikes.annotate(ica_source=i)
-                                reduced_sst.append(red_spikes)
-                                reduced_amps.append(amps[idxs])
-                                keep_id.append(idxs)
+                                if len(idxs) > 0:
+                                    red_spikes = sst[i][idxs]
+                                    red_spikes.annotations = copy(sst[i][idxs].annotations)
+                                    if 'ica_amp' in red_spikes.annotations:
+                                        red_spikes.annotate(ica_amp=red_spikes.annotations['ica_amp'][idxs])
+                                    if 'ica_wf' in red_spikes.annotations:
+                                        red_spikes.annotate(ica_wf=red_spikes.annotations['ica_wf'][idxs])
+                                    red_spikes.annotate(ica_source=i)
+                                    reduced_sst.append(red_spikes)
+                                    reduced_amps.append(amps[idxs])
+                                    keep_id.append(idxs)
                     silhos[i] = silho
                     cal_hars[i] = cal_har
                 else:
@@ -619,7 +624,7 @@ def cluster_spike_amplitudes(sst, metric='cal', min_sihlo=0.8, min_cal=100, max_
                 reduced_sst.append(red_spikes)
                 reduced_amps.append(amps)
                 keep_id.append(range(len(sst[i])))
-    #TODO keep cluster with largest amplitude (compute amplitudes)
+    # TODO keep cluster with largest amplitude (compute amplitudes)
     elif features == 'pca':
         for i, wf in enumerate(spike_wf):
             # apply pca on ica_wf
@@ -774,33 +779,35 @@ def cluster_spike_amplitudes(sst, metric='cal', min_sihlo=0.8, min_cal=100, max_
 
     return reduced_sst, reduced_amps, nclusters, keep_id, score
 
+
 def template_matching(sources, ic_templates):
     pass
+
 
 def matcorr(x, y, rmmean=False, weighting=None):
     from scipy.optimize import linear_sum_assignment
 
     m, n = x.shape
     p, q = y.shape
-    m = np.min([m,p])
+    m = np.min([m, p])
 
-    if m != n or  p!=q:
+    if m != n or p != q:
         # print 'matcorr(): Matrices are not square: using max abs corr method (2).'
         method = 2
 
     if n != q:
-      raise Exception('Rows in the two input matrices must be the same length.')
+        raise Exception('Rows in the two input matrices must be the same length.')
 
     if rmmean:
-      x = x - np.mean(x, axis=1) # optionally remove means
-      y = y - np.mean(y, axis=1)
+        x = x - np.mean(x, axis=1)  # optionally remove means
+        y = y - np.mean(y, axis=1)
 
-    dx = np.sum(x**2, axis=1)
-    dy = np.sum(y**2, axis=1)
-    dx[np.where(dx==0)] = 1
-    dy[np.where(dy==0)] = 1
+    dx = np.sum(x ** 2, axis=1)
+    dy = np.sum(y ** 2, axis=1)
+    dx[np.where(dx == 0)] = 1
+    dy[np.where(dy == 0)] = 1
     # raise Exception()
-    corrs = np.matmul(x, y.T)/np.sqrt(dx[:, np.newaxis]*dy[np.newaxis, :])
+    corrs = np.matmul(x, y.T) / np.sqrt(dx[:, np.newaxis] * dy[np.newaxis, :])
 
     if weighting != None:
         if any(corrs.shape != weighting.shape):
@@ -834,15 +841,16 @@ def evaluate_PI(ic_unmix, gt_mix):
 
     '''
     H = np.matmul(ic_unmix, gt_mix)
-    C = H**2
+    C = H ** 2
     N = np.min([gt_mix.shape[0], ic_unmix.shape[0]])
 
-    PI = (N - 0.5*(np.sum(np.max(C, axis=0)/np.sum(C, axis=0)) + np.sum(np.max(C, axis=1)/np.sum(C, axis=1))))/(N-1)
+    PI = (N - 0.5 * (np.sum(np.max(C, axis=0) / np.sum(C, axis=0)) + np.sum(np.max(C, axis=1) / np.sum(C, axis=1)))) / (
+            N - 1)
 
     return PI, C
 
 
-def evaluate_sum_CC(ic_mix, gt_mix, ic_sources, gt_sources, n_sources): # ):
+def evaluate_sum_CC(ic_mix, gt_mix, ic_sources, gt_sources, n_sources):  # ):
     '''
 
     Parameters
@@ -866,12 +874,12 @@ def evaluate_sum_CC(ic_mix, gt_mix, ic_sources, gt_sources, n_sources): # ):
     #
     # corr_cross_mix = corr_mix[id_sources:, :id_sources] ** 2
     # corr_cross_sources = corr_sources[id_sources:, :id_sources] ** 2
-    corr_cross_mix = corr_m**2
-    corr_cross_sources = corr_s**2
+    corr_cross_mix = corr_m ** 2
+    corr_cross_sources = corr_s ** 2
 
-    mix_CC_mean_gt = np.trace(corr_cross_mix)/n_sources
-    mix_CC_mean_id = np.trace(corr_cross_mix)/len(ic_sources)
-    sources_CC_mean = np.trace(corr_cross_sources)/n_sources
+    mix_CC_mean_gt = np.trace(corr_cross_mix) / n_sources
+    mix_CC_mean_id = np.trace(corr_cross_mix) / len(ic_sources)
+    sources_CC_mean = np.trace(corr_cross_sources) / n_sources
 
     return mix_CC_mean_gt, mix_CC_mean_id, sources_CC_mean, corr_cross_mix, corr_cross_sources
 
@@ -888,7 +896,7 @@ def find_consistent_sorces(source_idx, thresh=0.5):
     -------
 
     '''
-    len_no_empty = len([s for s in source_idx if len(s)>0])
+    len_no_empty = len([s for s in source_idx if len(s) > 0])
 
     s_dict = {}
     for s in source_idx:
@@ -900,7 +908,7 @@ def find_consistent_sorces(source_idx, thresh=0.5):
 
     consistent_sources = []
     for id in s_dict.keys():
-        if s_dict[id] >= thresh*len_no_empty:
+        if s_dict[id] >= thresh * len_no_empty:
             consistent_sources.append(id)
 
     return np.sort(consistent_sources)
@@ -937,3 +945,67 @@ def threshold_spike_sorting(recordings, threshold):
             spikes.update({i_rec: sp_times})
 
     return spikes
+
+
+def clean_tests(A_ica, s_ica, recording, method):
+    import scipy.stats as ss
+    # find closest channels
+    max_ids = np.argmax(A_ica, axis=1)
+    chan_loc = recording.get_channel_locations()
+    closest = []
+    for idx in max_ids:
+        pos = chan_loc[idx]
+        chans = []
+        for c in range(32):
+            dist = np.sqrt(np.square(pos[0] - chan_loc[c, 0]) + np.square(pos[1] - chan_loc[c, 1]))
+            if dist <= 60:
+                chans.append(c)
+        closest.append(chans)
+
+    if method == 'average':
+        av_val = []
+        for i, ind in enumerate(max_ids):
+            max_val = A_ica[i, ind]
+            close_val = A_ica[i, closest[i]]
+            av = max_val - (np.sum(close_val) - max_val) / (len(close_val) - 1)
+            av_val.append(av)
+        av_max = np.average(np.asarray(av_val))
+        source_idx = np.where(av_val > av_max*0.66)[0]
+        print(av_max)
+
+    if method == 'std':
+        tmp_val = []
+        for i, ind in enumerate(max_ids):
+            std = np.std(A_ica[i, closest[i]])
+            tmp_val.append(std)
+        av_std = np.average(np.asarray(tmp_val))
+        source_idx = np.where(tmp_val > av_std)[0]
+        print(av_std)
+
+    cleaned_sources_ica = s_ica[source_idx]
+    sk_sp = ss.skew(cleaned_sources_ica, axis=1)
+    # invert sources with positive skewness
+    cleaned_sources_ica[sk_sp > 0] = -cleaned_sources_ica[sk_sp > 0]
+
+    return cleaned_sources_ica, np.array(source_idx)
+
+
+from spyica.SpyICASorter.SpyICASorter import SpyICASorter
+
+
+def localize_sources(sorter, axis=1):
+    if not isinstance(sorter, SpyICASorter):
+        raise Exception("Import a SpyICASorter object")
+
+    recording = sorter.recording
+    idx = sorter.source_idx
+    chan_positions = recording.get_channel_locations()
+    if axis == 0:
+        matrix = np.abs(sorter.A_ica[:, idx])
+        s = np.sum(matrix, axis=axis)
+        coms = (matrix.T @ chan_positions) / s[:, np.newaxis]
+    else:
+        matrix = np.abs(sorter.A_ica[idx])
+        s = np.sum(matrix, axis=axis)
+        coms = (matrix @ chan_positions)/s[:, np.newaxis]
+    return coms
