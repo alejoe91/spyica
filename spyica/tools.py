@@ -949,37 +949,38 @@ def threshold_spike_sorting(recordings, threshold):
 
 def clean_tests(A_ica, s_ica, recording, method):
     import scipy.stats as ss
+
+    source_idx = []
+    chan_loc = recording.get_channel_locations()
+    num_channels = recording.get_num_channels()
+
     # find closest channels
     max_ids = np.argmax(A_ica, axis=1)
-    chan_loc = recording.get_channel_locations()
-    closest = []
-    for idx in max_ids:
-        pos = chan_loc[idx]
-        chans = []
-        for c in range(32):
-            dist = np.sqrt(np.square(pos[0] - chan_loc[c, 0]) + np.square(pos[1] - chan_loc[c, 1]))
-            if dist <= 60:
-                chans.append(c)
-        closest.append(chans)
+    dist = np.sqrt(np.square(chan_loc[:, 0] - chan_loc[:, 0, np.newaxis]) +
+                   np.square(chan_loc[:, 1] - chan_loc[:, 1, np.newaxis]))
+    closest = [[list(np.where(dist[:, i] < 60.0)[0])] for i in range(num_channels)]
+
+    if method == 'sum':
+        for chan in range(recording.get_num_channels()):
+            max_chan = max_ids[chan]
+            closest_val = A_ica[chan, closest[max_chan]]
+            if np.abs(np.sum(closest_val)) > max(np.max(closest_val), np.abs(np.min(closest_val))) * 0.66:
+            # if np.abs(np.sum(A_ica[chan])) > max(np.max(A_ica[chan]), np.abs(np.min(A_ica[chan]))):
+                source_idx.append(chan)
+            print(np.sum(closest_val), np.max(closest_val), np.min(closest_val), chan)
 
     if method == 'average':
-        av_val = []
-        for i, ind in enumerate(max_ids):
-            max_val = A_ica[i, ind]
-            close_val = A_ica[i, closest[i]]
-            av = max_val - (np.sum(close_val) - max_val) / (len(close_val) - 1)
-            av_val.append(av)
+        av_val = [A_ica[i, ind] - (np.sum(A_ica[i, closest[i]]) - A_ica[i, ind]) / (len(closest[i]) - 1)
+                  for i, ind in enumerate(max_ids)]
         av_max = np.average(np.asarray(av_val))
         source_idx = np.where(av_val > av_max*0.66)[0]
         print(av_max)
 
     if method == 'std':
-        tmp_val = []
-        for i, ind in enumerate(max_ids):
-            std = np.std(A_ica[i, closest[i]])
-            tmp_val.append(std)
-        av_std = np.average(np.asarray(tmp_val))
-        source_idx = np.where(tmp_val > av_std)[0]
+        std = np.array(np.std(A_ica[i, closest[i]])
+                       for i, ind in enumerate(max_ids))
+        av_std = np.average(std)
+        source_idx = np.where(std > av_std)[0]
         print(av_std)
 
     cleaned_sources_ica = s_ica[source_idx]
