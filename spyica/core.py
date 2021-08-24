@@ -17,7 +17,7 @@ def ica_spike_sorting(recording, clustering='mog', n_comp='all',
                       n_chunks=0, chunk_size=0, spike_thresh=5, dtype='int16',
                       keep_all_clusters=False, sample_window_ms=2, percent_spikes=None,
                       balance_spikes_on_channel=False, max_num_spikes=None, verbose=True,
-                      use_lambda=True, max_iter=200, clean_before=False, method='old'):
+                      max_iter=200, method='old', channel=[], thr=0.2, n_occ=5, n_blobs=3, seed=None):
     if not isinstance(recording, BaseRecording):
         raise Exception("Input a RecordingExtractor object!")
 
@@ -27,25 +27,21 @@ def ica_spike_sorting(recording, clustering='mog', n_comp='all',
     sorter = ss.SpyICASorter(recording)
     sorter.mask_traces(sample_window_ms=sample_window_ms, percent_spikes=percent_spikes,
                        balance_spikes_on_channel=balance_spikes_on_channel,
-                       max_num_spikes=max_num_spikes,
-                       use_lambda=use_lambda)
+                       max_num_spikes=max_num_spikes)
 
     t_init = time.time()
     sorter.compute_ica(n_comp, n_chunks=n_chunks, chunk_size=chunk_size,
-                       verbose=verbose, max_iter=max_iter)
+                       verbose=verbose, max_iter=max_iter, seed=seed)
     if verbose:
         t_ica = time.time() - t_init
         print('FastICA completed in: ', t_ica)
 
-    if clean_before:
-        sorter.clean_sources_ica(kurt_thresh=kurt_thresh, skew_thresh=skew_thresh, verbose=verbose)
-        traces = recording.get_traces(channel_ids=[str(x+1) for x in sorter.source_idx]).astype(dtype).T
-        sorter.cleaned_sources_ica = np.matmul(sorter.cleaned_W_ica, traces)
-    else:
-        traces = recording.get_traces().astype(dtype).T
-        sorter.s_ica = np.matmul(sorter.W_ica, traces)
+    traces = recording.get_traces().astype(dtype).T
+    traces_mean = traces.mean(axis=1)
+    sorter.s_ica = np.matmul(sorter.W_ica, traces - traces_mean[:, np.newaxis])
 
-        sorter.clean_sources_ica(method=method, kurt_thresh=kurt_thresh, skew_thresh=skew_thresh, verbose=verbose)
+    sorter.clean_sources_ica(method=method, thr=thr, n_occ=n_occ, channel=channel, n_blobs=n_blobs,
+                             kurt_thresh=kurt_thresh, skew_thresh=skew_thresh, verbose=verbose)
 
     sorter.cluster(recording.get_num_frames(0),
                    clustering, spike_thresh, keep_all_clusters, features, verbose)
@@ -66,7 +62,7 @@ def ica_spike_sorting(recording, clustering='mog', n_comp='all',
 
     # TODO add spike properties and features
 
-    return sorting, sorter  # , cleaned_sources_ica
+    return sorting, sorter, traces_mean  # , cleaned_sources_ica
 
 
 def orica_spike_sorting(recording, clustering='mog', n_comp='all',

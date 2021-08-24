@@ -4,7 +4,7 @@ import numpy as np
 from sklearn.decomposition import FastICA
 
 
-def instICA(X, n_comp='all', n_chunks=1, chunk_size=None, max_iter=200):
+def instICA(X, n_comp='all', n_chunks=1, chunk_size=None, max_iter=200, seed=None):
     """Performs instantaneous ICA.
 
     Parameters
@@ -13,8 +13,13 @@ def instICA(X, n_comp='all', n_chunks=1, chunk_size=None, max_iter=200):
         2d array of analog signals (N x T)
     n_comp : int or 'all'
              number of ICA components
+    n_chunks : int
+
+    chunk_size : int
+
     max_iter :  int
                 max number of ICA iterations
+    seed : int
 
     Returns
     -------
@@ -53,7 +58,7 @@ def instICA(X, n_comp='all', n_chunks=1, chunk_size=None, max_iter=200):
     else:
         X_reduced = X
 
-    ica = FastICA(n_components=n_comp, max_iter=max_iter)  # , algorithm='deflation')
+    ica = FastICA(n_components=n_comp, max_iter=max_iter, random_state=seed)  # , algorithm='deflation')
     ica.fit(np.transpose(X_reduced))
     sources = np.transpose(ica.transform(np.transpose(X)))
     A = np.transpose(ica.mixing_)
