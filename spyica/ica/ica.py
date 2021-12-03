@@ -3,7 +3,8 @@ from __future__ import print_function
 import numpy as np
 from sklearn.decomposition import FastICA
 
-def instICA(X, n_comp='all', n_chunks=1, chunk_size=None):
+
+def instICA(X, n_comp='all', n_chunks=1, chunk_size=None, max_iter=200, whiten=True, seed=None):
     """Performs instantaneous ICA.
 
     Parameters
@@ -12,6 +13,15 @@ def instICA(X, n_comp='all', n_chunks=1, chunk_size=None):
         2d array of analog signals (N x T)
     n_comp : int or 'all'
              number of ICA components
+    n_chunks : int
+
+    chunk_size : int
+
+    max_iter :  int
+                max number of ICA iterations
+    whiten : bool
+             if True, data are whitened before applying ICA
+    seed : int
 
     Returns
     -------
@@ -31,14 +41,14 @@ def instICA(X, n_comp='all', n_chunks=1, chunk_size=None):
         if chunk_size is None:
             raise AttributeError('Chunk size (n_samples) is required')
         else:
-            assert chunk_size*n_chunks < n_obs
+            assert chunk_size * n_chunks < n_obs
             chunk_init = []
             idxs = []
             for c in range(n_chunks):
                 proceed = False
                 i = 0
-                while not proceed and i<1000:
-                    c_init = np.random.randint(n_obs-n_chunks-1)
+                while not proceed and i < 1000:
+                    c_init = np.random.randint(n_obs - n_chunks - 1)
                     proceed = True
                     for prev_c in chunk_init:
                         if c_init > prev_c and c_init < c_init + chunk_size:
@@ -50,13 +60,14 @@ def instICA(X, n_comp='all', n_chunks=1, chunk_size=None):
     else:
         X_reduced = X
 
-    ica = FastICA(n_components=n_comp) #, algorithm='deflation')
+    ica = FastICA(n_components=n_comp, max_iter=max_iter, whiten=whiten, random_state=seed)  # , algorithm='deflation')
     ica.fit(np.transpose(X_reduced))
     sources = np.transpose(ica.transform(np.transpose(X)))
     A = np.transpose(ica.mixing_)
     W = ica.components_
 
     return sources, A, W
+
 
 def iICAweights(weight, mea_dim=None, axis=None, cmap='viridis', style='mat', origin='lower'):
     import matplotlib.pyplot as plt

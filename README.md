@@ -34,6 +34,27 @@ sorting = spyica.orica_spike_sorting(recording)
 sorting = spyica.online_orica_spike_sorting(recording)
 ```
 
+### Units recovery
+
+SpyICA can apply ICA to improve the performance of other sorters. The recovery function takes a list or dictionary of `RecordingExtractor` objects, a list or dictionary of ground truth `SortingExtractor` objects (if available) and a list of sorter names as input. It returns a dictionary of `SortingExtractor` objects.
+
+```
+import spikeinterface.extractors as se
+from spyica.unitsrecovery import units_recovery
+
+recording1 = se.read_somerecording('path-to-file1')
+...
+recordingN = se.read_somerecording('path-to-fileN')
+
+sorters_list = ['sorter1_name', ..., 'sorterN_name'] 
+
+#if ground truth is not available
+recovery_object = units_recovery(sorters_list, [recording1, ..., recordingN])
+
+#if ground truth (gt) is available
+recovery_object = units_recovery(sorters_list, [recording1, ..., recordingN], gt=gt_list_or_dict)
+```
+
 ### References
 
 If you use SpyICA, please cite:
